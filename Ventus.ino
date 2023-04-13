@@ -43,13 +43,13 @@ Completed (hardware):
 #include <Adafruit_Sensor.h>
 #include <Ticker.h>
 
-#define SEALEVELPRESSURE (1002)
+#define SEALEVELPRESSURE (1004)
 
 Adafruit_BMP3XX bmp;
 
 float filtered_x, filtered_v, weight;
 
-const float BMP_INTERVAL = 0.05;  // 20 Hz interval
+const float BMP_INTERVAL = 0.02;  // 50 Hz interval
 Ticker tickerBMP;
 
 // Kalman filter parameters
@@ -57,8 +57,8 @@ float x = 0;              // Initial position
 float v = 0;              // Initial velocity
 float res_var = 1;        // Initial residual variance
 float dt = BMP_INTERVAL;  // Time step
-float R = 0.25;           // Measurement noise variance
-float Q = 2;              // Process noise variance
+float R = 0.05;           // Measurement noise variance
+float Q = 1;              // Process noise variance
 float w, res, z;
 
 struct KalmanOutput {
@@ -98,7 +98,7 @@ KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &
   res_var = (1 - K) * res_var + K * Q * res * res;      // Updated residual variance
   float w = 1 / (res_var + R);                          // Weight of the measurement
 
-  return { x, v, w };
+  return { x, R, w };
 }
 
 void BMP_Interrupt() {
@@ -113,7 +113,7 @@ void BMP_Interrupt() {
   Serial.print(",");
   Serial.print(filtered_x);
   Serial.print(",");
-  Serial.print(filtered_v);
+  Serial.print(filtered_v * 100);
   Serial.print(",");
   Serial.println(weight);
 }
