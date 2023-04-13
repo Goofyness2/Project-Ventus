@@ -43,7 +43,7 @@ Completed (hardware):
 #include <Adafruit_Sensor.h>
 #include <Ticker.h>
 
-#define SEALEVELPRESSURE (1026.14)
+#define SEALEVELPRESSURE (1002)
 
 Adafruit_BMP3XX bmp;
 
@@ -58,7 +58,7 @@ float v = 0;              // Initial velocity
 float res_var = 1;        // Initial residual variance
 float dt = BMP_INTERVAL;  // Time step
 float R = 0.25;           // Measurement noise variance
-float alpha = 2;          // Process noise variance
+float Q = 2;              // Process noise variance
 float w, res, z;
 
 struct KalmanOutput {
@@ -85,18 +85,17 @@ void setup() {
   bmp.setOutputDataRate(BMP3_ODR_50_HZ);
 }
 
-KalmanOutput kalmanFilter(float z, float dt, float R, float alpha, float &x, float &v, float &res, float &res_var) {
+KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &v, float &res, float &res_var) {
   // Prediction step
   float x_pred = x + v * dt;
-  float v_pred = v;
 
   // Update step
   float res_pred = z - x_pred;                          // Predicted residual
   float K = res_var / (res_var + R);                    // Kalman gain
   x = x_pred + K * res_pred;                            // Updated state estimate
-  v = v_pred + K * (res_pred / dt);                     // Updated velocity estimate
+  v = 0;                                                // Updated velocity estimate v_pred + K * (res_pred / dt)
   res = z - x;                                          // Updated residual
-  res_var = (1 - K) * res_var + K * alpha * res * res;  // Updated residual variance
+  res_var = (1 - K) * res_var + K * Q * res * res;      // Updated residual variance
   float w = 1 / (res_var + R);                          // Weight of the measurement
 
   return { x, v, w };
@@ -105,7 +104,7 @@ KalmanOutput kalmanFilter(float z, float dt, float R, float alpha, float &x, flo
 void BMP_Interrupt() {
   z = bmp.readAltitude(SEALEVELPRESSURE);
 
-  KalmanOutput output = kalmanFilter(z, dt, R, alpha, x, v, res, res_var);
+  KalmanOutput output = kalmanFilter(z, dt, R, Q, x, v, res, res_var);
   filtered_x = output.x;
   filtered_v = output.v;
   weight = output.w;
