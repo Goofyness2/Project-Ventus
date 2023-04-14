@@ -64,17 +64,25 @@ struct euler_t {
   float roll;
 } ypr;
 
+struct euler_t2 {
+  float yaw;
+  float pitch;
+  float roll;
+} ypr2;
+
 Adafruit_BNO08x  bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
 float acc_x, acc_y, acc_z;
-float gyro_x, gyro_y, gyro_z;
 float mag_x, mag_y, mag_z;
 
 void setReports() {
   Serial.println("Setting desired reports");
   if (! bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 5000)) {
     Serial.println("Could not enable stabilized remote vector");
+  }
+  if (!bno08x.enableReport(SH2_ROTATION_VECTOR)) {
+    Serial.println("Could not enable rotation vector");
   }
   if (!bno08x.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED)) {
     Serial.println("Could not enable magnetic field calibrated");
@@ -122,14 +130,27 @@ void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, boo
     }
 }
 
+void quaternionToEuler2(float qr, float qi, float qj, float qk, euler_t2* ypr2, bool degrees = false) {
+
+    float sqr = sq(qr);
+    float sqi = sq(qi);
+    float sqj = sq(qj);
+    float sqk = sq(qk);
+
+    ypr2->yaw = atan2(2.0 * (qi * qj + qk * qr), (sqi - sqj - sqk + sqr));
+    ypr2->pitch = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
+    ypr2->roll = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
+
+    if (degrees) {
+      ypr2->yaw *= RAD_TO_DEG;
+      ypr2->pitch *= RAD_TO_DEG;
+      ypr2->roll *= RAD_TO_DEG;
+    }
+}
+
 void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, euler_t* ypr, bool degrees = false) {
     quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, ypr, degrees);
 }
-
-void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, euler_t* ypr, bool degrees = false) {
-    quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, ypr, degrees);
-}
-
 
 void loop() {
   delay(10);
@@ -144,37 +165,30 @@ void loop() {
     switch (sensorValue.sensorId) {
       case SH2_ARVR_STABILIZED_RV:
         quaternionToEulerRV(&sensorValue.un.arvrStabilizedRV, &ypr, true);
-        // SD save ypr.yaw, ypr.pitch, ypr.roll
-        //Serial.print("Rotation:");            Serial.print("\t");
-        //Serial.print(ypr.yaw);                Serial.print("\t");
-        //Serial.print(ypr.pitch);              Serial.print("\t");
-        //Serial.println(ypr.roll);
-        break;        
+        break;
+      case SH2_ROTATION_VECTOR:
+        quaternionToEuler2(sensorValue.un.rotationVector.real, sensorValue.un.rotationVector.i, sensorValue.un.rotationVector.j, sensorValue.un.rotationVector.k, &ypr2, true);
+        break;
       case SH2_MAGNETIC_FIELD_CALIBRATED:
         mag_x = sensorValue.un.magneticField.x;
         mag_y = sensorValue.un.magneticField.y;
         mag_z = sensorValue.un.magneticField.z;
-        // SD save mag_x, mag_y, mag_z
-        //Serial.print("Magnetic field: ");
-        //Serial.print(sensorValue.un.magneticField.x); Serial.print("\t");
-        //Serial.print(sensorValue.un.magneticField.y); Serial.print("\t");
-        //Serial.println(sensorValue.un.magneticField.z);
         break;
       case SH2_LINEAR_ACCELERATION:
-        acc_x = sensorValue.un.magneticField.x;
-        acc_y = sensorValue.un.magneticField.y;
-        acc_z = sensorValue.un.magneticField.z;
-        // SD save acc_x, acc_y, acc_z
-        Serial.println("");
-        Serial.print("Linear acceleration: ");
-        Serial.print(sensorValue.un.linearAcceleration.x); Serial.print("\t");
-        Serial.print(sensorValue.un.linearAcceleration.y); Serial.print("\t");
-        Serial.println(sensorValue.un.linearAcceleration.z);
+        acc_x = sensorValue.un.linearAcceleration.x;
+        acc_y = sensorValue.un.linearAcceleration.y;
+        acc_z = sensorValue.un.linearAcceleration.z;
         break;
     }
 
     //Serial.println(sensorValue.status);
-    //Serial.println("");
+    Serial.print(ypr.yaw);  Serial.print(", ");
+    Serial.print(ypr.pitch);  Serial.print(", ");
+    Serial.println(ypr.roll);
+    Serial.print(ypr2.yaw);  Serial.print(", ");
+    Serial.print(ypr2.pitch);  Serial.print(", ");
+    Serial.println(ypr2.roll);
+    Serial.println("");
   }
 
 }
