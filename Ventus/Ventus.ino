@@ -20,9 +20,6 @@ To do list (software):
     - Send processed data at 5 Hz (interrupt clock?)
   - GPS
     - Make sure that parsed data can be saved
-  - BMP390
-    - Kalman filtering
-    - 5 Hz or 50 Hz?
   - BNO085
     - Check goofy data
     - Integrate. Compare between accelerometers.
@@ -50,7 +47,8 @@ To do list (hardware):
   - Safety circuit (capacitor)
 
 Completed (hardware):
-  -
+  - BMP390
+    - Kalman filtering, 50 Hz
 
 */
 
