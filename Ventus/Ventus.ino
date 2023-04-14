@@ -1,5 +1,19 @@
 /*
 
+VSCode arduino activation:
+settings.json (add):
+
+"arduino.path": "",
+    "arduino.commandPath": "",
+    "arduino.additionalUrls": [
+        "https://raw.githubusercontent.com/VSChina/azureiotdevkit_tools/master/package_azureboard_index.json",
+        "http://arduino.esp8266.com/stable/package_esp8266com_index.json"
+    ],
+    "arduino.logLevel": "info",
+    "C_Cpp.intelliSenseEngine": "Tag Parser"
+
+
+
 To do list (software):
   - Radio
     - Find right frequencies
@@ -42,9 +56,12 @@ Completed (hardware):
 
 void setup() {
     // ...
+    Serial.begin(115200);
 }
 
 
 void loop() {
     // ...
+    Serial.print("HEJJJJJ");
+    delay(100);
 }
