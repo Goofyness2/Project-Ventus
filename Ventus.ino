@@ -50,7 +50,7 @@ Completed (hardware):
 
 Adafruit_BMP3XX bmp;
 
-float BMPalt, BMPw, BMPalt1, BMPalt2, delta_BMP;
+float BMPalt, BMPw, BMPalt1, BMPalt2;
 
 // Kalman filter parameters
 float x = 0;              // Initial position
@@ -118,9 +118,9 @@ void BMP_Interrupt() {
   if (!bmp.performReading()) {
     Serial.println("Failed to perform reading :(");
   }
-  KalmanOutput output = kalmanFilter(bmp.readAltitude(SEALEVELPRESSURE), BMP_INTERVAL, R, Q, x, v, res, res_var);
-  BMPalt = output.x;
-  BMPw = output.w;
+  KalmanOutput bmp_output = kalmanFilter(bmp.readAltitude(SEALEVELPRESSURE), BMP_INTERVAL, R, Q, x, v, res, res_var);
+  BMPalt = bmp_output.x;
+  BMPw = bmp_output.w;
 }
 
 float convertCords(float degrees_minutes) {
@@ -169,17 +169,16 @@ void GPS_Interrupt() {
     unf_delta_y += earth_radius * delta_lat;
 
     BMPalt2 = BMPalt;
-    
-    delta_BMP = BMPalt2 - BMPalt1;
-    delta_z += delta_BMP;
 
-    KalmanOutput output = kalmanFilter(unf_delta_x, GPS_INTERVAL, R, Q, x, v, res, res_var);
-    delta_x = output.x;
-    delta_x_w = output.w;
+    delta_z += BMPalt2 - BMPalt1;
 
-    KalmanOutput output = kalmanFilter(unf_delta_y, GPS_INTERVAL, R, Q, x, v, res, res_var);
-    delta_y = output.x;
-    delta_y_w = output.w;
+    KalmanOutput delta_x_output = kalmanFilter(unf_delta_x, GPS_INTERVAL, R, Q, x, v, res, res_var);
+    delta_x = delta_x_output.x;
+    delta_x_w = delta_x_output.w;
+
+    KalmanOutput delta_y_output = kalmanFilter(unf_delta_y, GPS_INTERVAL, R, Q, x, v, res, res_var);
+    delta_y = delta_y_output.x;
+    delta_y_w = delta_y_output.w;
 
     GPSw = (delta_x_w + delta_y_w) / 2;
 
@@ -204,9 +203,6 @@ void GPS_Interrupt() {
     Serial.println(" ");
     Serial.print("Z: ");
     Serial.print(delta_z);
-    Serial.print(" (");
-    Serial.print(delta_BMP);
-    Serial.print(")");
     Serial.println(" ");
     Serial.print("BMP weight: ");
     Serial.print(BMPw);
@@ -222,9 +218,6 @@ void GPS_Interrupt() {
     Serial.println(" ");
     Serial.print("Longitude: ");
     Serial.print(lon2);
-    Serial.println(" ");
-    Serial.print("Altitude: ");
-    Serial.println(alt2);
     Serial.println(" ");
     Serial.print("Speed: ");
     Serial.print(GPS.speed * 1.852);
