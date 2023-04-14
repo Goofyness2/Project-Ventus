@@ -52,18 +52,18 @@ Adafruit_BMP3XX bmp;
 
 float BMPalt, BMPw, BMPalt1, BMPalt2, delta_BMP;
 
-struct KalmanOutput {
-  float x;
-  float w;
-};
-
 // Kalman filter parameters
 float x = 0;              // Initial position
 float v = 0;              // Initial velocity
 float res_var = 1;        // Initial residual variance
 float R = 2.5;            // Measurement noise variance
 float Q = 1;              // Process noise variance
-float dt, w, res, z;
+float dt, w, res, z;      // Remaining parameters
+
+struct KalmanOutput {
+  float x;
+  float w;
+};
 
 const float BMP_INTERVAL = 0.02;  // 50 Hz interval
 Ticker tickerBMP;
@@ -81,21 +81,6 @@ float earth_radius = 6371000.0;
 #define GPSECHO false
 
 #define BUTTON_PIN 12
-
-// Kalman filter parameters
-float x = 0; // Initial position
-float v = 0; // Initial velocity
-float res_var = 1; // Initial residual variance
-float dt = GPS_INTERVAL; // Time step
-float R = 2.5; // Measurement noise variance
-float Q = 1; // Process noise variance
-float w, res, z;
-
-struct KalmanOutput {
-  float x;
-  float v;
-  float w;
-};
 
 void setup() {
   Serial.begin(115200);
@@ -155,7 +140,7 @@ KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &
   float res_pred = z - x_pred;          // Predicted residual
   float K = res_var / (res_var + R);    // Kalman gain
   x = x_pred + K * res_pred;            // Updated state estimate
-  v = 0;                                // Updated velocity estimate v_pred + K * (res_pred / dt)
+  v = 0;     // Updated velocity estimate v_pred + K * (res_pred / dt)
   res = z - x;                          // Updated residual
   res_var = (1 - K) * res_var + K * Q;  // Updated residual variance
   float w = 1 / (res_var + R);          // Weight of the measurement
