@@ -14,6 +14,7 @@ To do list (software):
     - Integrate. Compare between accelerometers.
       - (Combine MPU-6050 acceleration and BNO orientation and integrate. Subtracting gravitation needed)
   - Fix safety system when power drops (interrupt)
+  - Safety system for when sensors return NULL, the weight should be zero
   - Sensor fusion
 
 Completed (software):
@@ -38,7 +39,6 @@ Completed (hardware):
   -
 
 */
-
 
 void setup() {
     // ...
