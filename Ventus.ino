@@ -76,6 +76,8 @@ Adafruit_GPS GPS(&mySerial);
 
 float lat1, lat2, lon1, lon2, delta_x, delta_y, delta_z, unf_delta_x, unf_delta_y, delta_x_w, delta_y_w, GPSw;
 
+float earth_radius = 6371000.0;
+
 #define GPSECHO false
 
 #define BUTTON_PIN 12
@@ -133,7 +135,15 @@ void BMP_Interrupt() {
   }
   KalmanOutput output = kalmanFilter(bmp.readAltitude(SEALEVELPRESSURE), BMP_INTERVAL, R, Q, x, v, res, res_var);
   BMPalt = output.x;
-  BMPw = weight = output.w;
+  BMPw = output.w;
+}
+
+float convertCords(float degrees_minutes) {
+  float degrees = floor(degrees_minutes / 100);
+  float minutes = degrees_minutes - (degrees * 100);
+  float decimal_degrees = degrees + (minutes / 60);
+
+  return decimal_degrees;
 }
 
 KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &v, float &res, float &res_var) {
@@ -145,7 +155,7 @@ KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &
   float res_pred = z - x_pred;          // Predicted residual
   float K = res_var / (res_var + R);    // Kalman gain
   x = x_pred + K * res_pred;            // Updated state estimate
-  v = v_pred + K * (res_pred / dt);     // Updated velocity estimate
+  v = 0;     // Updated velocity estimate v_pred + K * (res_pred / dt)
   res = z - x;                          // Updated residual
   res_var = (1 - K) * res_var + K * Q;  // Updated residual variance
   float w = 1 / (res_var + R);          // Weight of the measurement
@@ -167,13 +177,16 @@ void GPS_Interrupt() {
     float lat2_rad = radians(lat2);
     float lon2_rad = radians(lon2);
 
+    float delta_lat = lat2_rad - lat1_rad;
+    float delta_lon = lon2_rad - lon1_rad;
+
+    unf_delta_x += earth_radius * delta_lon * cos(lat1_rad);
+    unf_delta_y += earth_radius * delta_lat;
+
     BMPalt2 = BMPalt;
     
     delta_BMP = BMPalt2 - BMPalt1;
     delta_z += delta_BMP;
-
-    unf_delta_x += (lon2 - lon1) * 111320 * cos((lat1 + lat2) / 2);
-    unf_delta_y += (lat2 - lat1) * 111320;
 
     KalmanOutput output = kalmanFilter(unf_delta_x, GPS_INTERVAL, R, Q, x, v, res, res_var);
     delta_x = output.x;
@@ -187,6 +200,8 @@ void GPS_Interrupt() {
 
     if (digitalRead(BUTTON_PIN) == LOW) {
       Serial.println("Resetting delta meters");
+      unf_delta_x = 0;
+      unf_delta_y = 0;
       delta_x = 0;
       delta_y = 0;
       delta_z = 0;
@@ -194,7 +209,6 @@ void GPS_Interrupt() {
 
     lat1 = lat2;
     lon1 = lon2;
-    alt1 = alt2;
     BMPalt1 = BMPalt2;
 
     Serial.print("X: ");
@@ -216,7 +230,7 @@ void GPS_Interrupt() {
     Serial.print(GPSw);
     Serial.println(" ");
     Serial.print("Diagonal: ");
-    Serial.println(sqrt(pow(delta_x, 2) + pow(delta_y, 2)));
+    Serial.println(sqrt(pow(delta_x, 2.0) + pow(delta_y, 2.0)));
     Serial.println(" ");
     Serial.print("Latitude: ");
     Serial.print(lat2);
@@ -234,31 +248,6 @@ void GPS_Interrupt() {
     Serial.println((int)GPS.satellites);
     Serial.println(" ");
   }
-}
-
-float convertCords(float degrees_minutes) {
-  float degrees = floor(degrees_minutes / 100);
-  float minutes = degrees_minutes - (degrees * 100);
-  float decimal_degrees = degrees + (minutes / 60);
-
-  return decimal_degrees;
-}
-
-KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &v, float &res, float &res_var) {
-  // Prediction step
-  float x_pred = x + v * dt;
-  float v_pred = v;
-
-  // Update step
-  float res_pred = z - x_pred;  // Predicted residual
-  float K = res_var / (res_var + R); // Kalman gain
-  x = x_pred + K * res_pred; // Updated estimate
-  v = v_pred + K * (res_pred / dt); // Updated estimate
-  res = z - x; // Updated residual
-  res_var = (1 - K) * res_var + K * Q; // Updated residual variance
-  float w = 1 / (res_var + R); // Weight of the measurement
-
-  return {x, v, w};
 }
 
 void loop() {  // run over and over again
