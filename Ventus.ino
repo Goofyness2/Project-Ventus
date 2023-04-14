@@ -155,7 +155,7 @@ KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &
   float res_pred = z - x_pred;          // Predicted residual
   float K = res_var / (res_var + R);    // Kalman gain
   x = x_pred + K * res_pred;            // Updated state estimate
-  v = 0;     // Updated velocity estimate v_pred + K * (res_pred / dt)
+  v = 0;                                // Updated velocity estimate v_pred + K * (res_pred / dt)
   res = z - x;                          // Updated residual
   res_var = (1 - K) * res_var + K * Q;  // Updated residual variance
   float w = 1 / (res_var + R);          // Weight of the measurement
