@@ -46,26 +46,27 @@ Completed (hardware):
 #include <Ticker.h>
 #include <math.h>
 
-#define SEALEVELPRESSURE (102614)
+#define SEALEVELPRESSURE (1004)
 
 Adafruit_BMP3XX bmp;
 
-float BMPalt, BMPw, BMPalt1, BMPalt2;
+float BMPalt1, BMPalt2, BMPw, BMPoffset;
 
 // Kalman filter parameters
-float x = 0;              // Initial position
 float v = 0;              // Initial velocity
-float res_var = 1;        // Initial residual variance
-float R = 2.5;            // Measurement noise variance
+float R = 0.05;           // Measurement noise variance
 float Q = 1;              // Process noise variance
 float dt, w, res, z;      // Remaining parameters
+float bmp_res_var = 1;    // Initial residual variance for BMP
+float gps_x_res_var = 1;  // Initial residual variance for the x-axis of the GPS
+float gps_y_res_var = 1;  // Initial residual variance for the y-axis of the GPS
 
 struct KalmanOutput {
   float x;
   float w;
 };
 
-const float BMP_INTERVAL = 0.02;  // 50 Hz interval
+const float BMP_INTERVAL = 0.05;  // 50 Hz interval
 Ticker tickerBMP;
 
 const float GPS_INTERVAL = 0.2;  // 5 Hz interval
@@ -74,7 +75,7 @@ Ticker tickerGPS;
 SoftwareSerial mySerial(2, 3);  // TX, RX
 Adafruit_GPS GPS(&mySerial);
 
-float lat1, lat2, lon1, lon2, delta_x, delta_y, delta_z, unf_delta_x, unf_delta_y, delta_x_w, delta_y_w, GPSw;
+float lat1, lat2, lon1, lon2, delta_x, delta_y, delta_z, unf_delta_x_1, unf_delta_y_1, unf_delta_x_2, unf_delta_y_2, delta_x_w, delta_y_w, delta_lat, delta_lon, GPSw;
 
 float earth_radius = 6371000.0;
 
@@ -91,7 +92,8 @@ void setup() {
 
   if (!bmp.begin_I2C()) {
     Serial.println("Could not find a valid BMP3 sensor, check wiring!");
-    while (1);
+    while (1)
+      ;
   }
 
   // Set up oversampling and filter initialization
@@ -118,9 +120,12 @@ void BMP_Interrupt() {
   if (!bmp.performReading()) {
     Serial.println("Failed to perform reading :(");
   }
-  KalmanOutput bmp_output = kalmanFilter(bmp.readAltitude(SEALEVELPRESSURE), BMP_INTERVAL, R, Q, x, v, res, res_var);
-  BMPalt = bmp_output.x;
+  BMPalt1 = BMPalt2;
+  KalmanOutput bmp_output = kalmanFilter(bmp.readAltitude(SEALEVELPRESSURE), BMP_INTERVAL, R, Q, BMPalt1, v, res, bmp_res_var);
+  BMPalt2 = bmp_output.x;
   BMPw = bmp_output.w;
+
+  
 }
 
 float convertCords(float degrees_minutes) {
@@ -134,16 +139,15 @@ float convertCords(float degrees_minutes) {
 KalmanOutput kalmanFilter(float z, float dt, float R, float Q, float &x, float &v, float &res, float &res_var) {
   // Prediction step
   float x_pred = x + v * dt;
-  float v_pred = v;
 
   // Update step
-  float res_pred = z - x_pred;          // Predicted residual
-  float K = res_var / (res_var + R);    // Kalman gain
-  x = x_pred + K * res_pred;            // Updated state estimate
-  v = 0;     // Updated velocity estimate v_pred + K * (res_pred / dt)
-  res = z - x;                          // Updated residual
-  res_var = (1 - K) * res_var + K * Q;  // Updated residual variance
-  float w = 1 / (res_var + R);          // Weight of the measurement
+  float res_pred = z - x_pred;                      // Predicted residual
+  float K = res_var / (res_var + R);                // Kalman gain
+  x = x_pred + K * res_pred;                        // Updated state estimate
+  v = 0;                                            // Updated velocity estimate v_pred + K * (res_pred / dt)
+  res = z - x;                                      // Updated residual
+  res_var = (1 - K) * res_var + K * Q * res * res;  // Updated residual variance
+  float w = 1 / (res_var + R);                      // Weight of the measurement
 
   return { x, w };
 }
@@ -154,6 +158,9 @@ void GPS_Interrupt() {
   Serial.println(" ");
 
   if (GPS.fix) {
+    unf_delta_x_1 = unf_delta_x_2;
+    unf_delta_y_1 = unf_delta_y_2;
+
     lat2 = convertCords(GPS.latitude);
     lon2 = convertCords(GPS.longitude);
 
@@ -162,70 +169,71 @@ void GPS_Interrupt() {
     float lat2_rad = radians(lat2);
     float lon2_rad = radians(lon2);
 
-    float delta_lat = lat2_rad - lat1_rad;
-    float delta_lon = lon2_rad - lon1_rad;
+    delta_lat = lat2_rad - lat1_rad;
+    delta_lon = lon2_rad - lon1_rad;
 
-    unf_delta_x += earth_radius * delta_lon * cos(lat1_rad);
-    unf_delta_y += earth_radius * delta_lat;
+    unf_delta_x_2 += earth_radius * delta_lon * cos(lat1_rad);
+    unf_delta_y_2 += earth_radius * delta_lat;
 
-    BMPalt2 = BMPalt;
-
-    delta_z += BMPalt2 - BMPalt1;
-
-    KalmanOutput delta_x_output = kalmanFilter(unf_delta_x, GPS_INTERVAL, R, Q, x, v, res, res_var);
+    KalmanOutput delta_x_output = kalmanFilter(unf_delta_x_2, GPS_INTERVAL, R, Q, unf_delta_x_1, v, res, gps_x_res_var);
     delta_x = delta_x_output.x;
     delta_x_w = delta_x_output.w;
 
-    KalmanOutput delta_y_output = kalmanFilter(unf_delta_y, GPS_INTERVAL, R, Q, x, v, res, res_var);
+    KalmanOutput delta_y_output = kalmanFilter(unf_delta_y_2, GPS_INTERVAL, R, Q, unf_delta_y_1, v, res, gps_y_res_var);
     delta_y = delta_y_output.x;
     delta_y_w = delta_y_output.w;
 
     GPSw = (delta_x_w + delta_y_w) / 2;
-
-    if (digitalRead(BUTTON_PIN) == LOW) {
-      Serial.println("Resetting delta meters");
-      unf_delta_x = 0;
-      unf_delta_y = 0;
-      delta_x = 0;
-      delta_y = 0;
-      delta_z = 0;
-    }
-
-    lat1 = lat2;
-    lon1 = lon2;
-    BMPalt1 = BMPalt2;
-
-    Serial.print("X: ");
-    Serial.print(delta_x);
-    Serial.println(" ");
-    Serial.print("Y: ");
-    Serial.print(delta_y);
-    Serial.println(" ");
-    Serial.print("Z: ");
-    Serial.print(delta_z);
-    Serial.println(" ");
-    Serial.print("BMP weight: ");
-    Serial.print(BMPw);
-    Serial.println(" ");
-    Serial.print("GPS weight: ");
-    Serial.print(GPSw);
-    Serial.println(" ");
-    Serial.print("Diagonal: ");
-    Serial.println(sqrt(pow(delta_x, 2.0) + pow(delta_y, 2.0)));
-    Serial.println(" ");
-    Serial.print("Latitude: ");
-    Serial.print(lat2);
-    Serial.println(" ");
-    Serial.print("Longitude: ");
-    Serial.print(lon2);
-    Serial.println(" ");
-    Serial.print("Speed: ");
-    Serial.print(GPS.speed * 1.852);
-    Serial.println(" km/h");
-    Serial.print("Satellites: ");
-    Serial.println((int)GPS.satellites);
-    Serial.println(" ");
   }
+
+  delta_z = BMPalt2 - BMPoffset;
+
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    Serial.println("Resetting delta meters");
+    BMPoffset = BMPalt2;
+    delta_lat = 0;
+    delta_lon = 0;
+    unf_delta_x_2 = 0;
+    unf_delta_y_2 = 0;
+    delta_x = 0;
+    delta_y = 0;
+    delta_z = 0;
+  }
+
+  lat1 = lat2;
+  lon1 = lon2;
+  BMPalt1 = BMPalt2;
+
+  Serial.print("X: ");
+  Serial.print(delta_x);
+  Serial.println(" ");
+  Serial.print("Y: ");
+  Serial.print(delta_y);
+  Serial.println(" ");
+  Serial.print("Z: ");
+  Serial.print(delta_z);
+  Serial.println(" ");
+  Serial.print("BMP weight: ");
+  Serial.print(BMPw);
+  Serial.println(" ");
+  Serial.print("GPS weight: ");
+  Serial.print(delta_x_w);
+  Serial.println(" ");
+  Serial.print("Diagonal: ");
+  Serial.println(sqrt(pow(delta_x, 2.0) + pow(delta_y, 2.0)));
+  Serial.println(" ");
+  Serial.print("unf_delta_x_2: ");
+  Serial.print(unf_delta_x_2);
+  Serial.println(" ");
+  Serial.print("unf_delta_y_2: ");
+  Serial.print(unf_delta_y_2);
+  Serial.println(" ");
+  Serial.print("Speed: ");
+  Serial.print(GPS.speed * 1.852);
+  Serial.println(" km/h");
+  Serial.print("Satellites: ");
+  Serial.println((int)GPS.satellites);
+  Serial.println(" ");
 }
 
 void loop() {  // run over and over again
