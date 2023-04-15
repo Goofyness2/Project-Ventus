@@ -76,6 +76,14 @@ sh2_SensorValue_t sensorValue;
 float acc_x, acc_y, acc_z;
 float mag_x, mag_y, mag_z;
 
+float vel_x = 0;
+float vel_y = 0;
+float vel_z = 0;
+
+float pos_x = 0;
+float pos_y = 0;
+float pos_z = 0;
+
 void setReports() {
   Serial.println("Setting desired reports");
   if (! bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 5000)) {
@@ -96,6 +104,8 @@ void setup(void) {
 
   Serial.begin(115200);
   while (!Serial) delay(10);
+
+  delay(500);
   
   Serial.println("Adafruit BNO085 data!");
 
@@ -152,6 +162,10 @@ void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, euler_t* y
     quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, ypr, degrees);
 }
 
+
+unsigned long int lastUpdate = micros();
+unsigned long int deltaTime = 0;
+
 void loop() {
   delay(10);
 
@@ -161,34 +175,80 @@ void loop() {
   }
   
   if (bno08x.getSensorEvent(&sensorValue)) {
-    //Serial.println(micros());    
     switch (sensorValue.sensorId) {
       case SH2_ARVR_STABILIZED_RV:
         quaternionToEulerRV(&sensorValue.un.arvrStabilizedRV, &ypr, true);
+        printData(" (Stabilized)");
         break;
       case SH2_ROTATION_VECTOR:
         quaternionToEuler2(sensorValue.un.rotationVector.real, sensorValue.un.rotationVector.i, sensorValue.un.rotationVector.j, sensorValue.un.rotationVector.k, &ypr2, true);
+        printData(" (Rotation Vector)");
         break;
       case SH2_MAGNETIC_FIELD_CALIBRATED:
         mag_x = sensorValue.un.magneticField.x;
         mag_y = sensorValue.un.magneticField.y;
         mag_z = sensorValue.un.magneticField.z;
+        printData(" (Magnetic field)");
         break;
       case SH2_LINEAR_ACCELERATION:
         acc_x = sensorValue.un.linearAcceleration.x;
         acc_y = sensorValue.un.linearAcceleration.y;
         acc_z = sensorValue.un.linearAcceleration.z;
+
+        deltaTime = (micros() - lastUpdate) / 1000000;
+        pos_x += vel_x * deltaTime + acc_x * pow(deltaTime, 2) / 2;
+        pos_y += vel_y * deltaTime + acc_y * pow(deltaTime, 2) / 2;
+        pos_z += vel_z * deltaTime + acc_z * pow(deltaTime, 2) / 2;
+
+        vel_x += acc_x * deltaTime;
+        vel_y += acc_y * deltaTime;
+        vel_z += acc_z * deltaTime;
+
+        lastUpdate += deltaTime;
+
+        printData(" (Linear acceleration)");
         break;
     }
-
-    //Serial.println(sensorValue.status);
-    Serial.print(ypr.yaw);  Serial.print(", ");
-    Serial.print(ypr.pitch);  Serial.print(", ");
-    Serial.println(ypr.roll);
-    Serial.print(ypr2.yaw);  Serial.print(", ");
-    Serial.print(ypr2.pitch);  Serial.print(", ");
-    Serial.println(ypr2.roll);
-    Serial.println("");
   }
+}
 
+void printData(const char type[]) {
+  Serial.println("");
+  Serial.println("");
+  Serial.print("Status"); Serial.print(type); Serial.print(": ");
+  Serial.println(sensorValue.status);
+  Serial.println("");
+
+  Serial.print("Stabilized rotation vector: ");
+  Serial.print(ypr.yaw);  Serial.print(", ");
+  Serial.print(ypr.pitch);  Serial.print(", ");
+  Serial.println(ypr.roll);
+  Serial.print("Rotation vector: ");
+  Serial.print(ypr2.yaw);  Serial.print(", ");
+  Serial.print(ypr2.pitch);  Serial.print(", ");
+  Serial.println(ypr2.roll);
+  Serial.println("");
+
+  Serial.print("Magnetic field vector: ");
+  Serial.print(mag_x);  Serial.print(", ");
+  Serial.print(mag_y);  Serial.print(", ");
+  Serial.println(mag_z);
+  Serial.println("");
+
+  Serial.print("Linear acceleration vector: ");
+  Serial.print(acc_x);  Serial.print(", ");
+  Serial.print(acc_y);  Serial.print(", ");
+  Serial.println(acc_z);
+  Serial.println("");
+
+  Serial.print("Integrated velocity: ");
+  Serial.print(vel_x);  Serial.print(", ");
+  Serial.print(vel_y);  Serial.print(", ");
+  Serial.println(vel_z);
+  Serial.println("");
+
+  Serial.print("Integrated position: ");
+  Serial.print(pos_x);  Serial.print(", ");
+  Serial.print(pos_y);  Serial.print(", ");
+  Serial.println(pos_z);
 }
