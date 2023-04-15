@@ -1,0 +1,7 @@
+{
+    "git.ignoreLimitWarning": true,
+    "arduino.path": "",
+    "arduino.additionalUrls": [],
+    "arduino.logLevel": "info",
+    "C_Cpp.intelliSenseEngine": "Tag Parser"
+}

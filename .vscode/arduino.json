@@ -1,0 +1,6 @@
+{
+    "board": "esp8266:esp8266:huzzah",
+    "port": "/dev/ttyUSB0",
+    "sketch": "Ventus/Ventus.ino",
+    "output": "../ArduinoOutput"
+}
