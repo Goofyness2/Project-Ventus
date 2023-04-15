@@ -20,10 +20,13 @@ To do list (software):
     - Send processed data at 5 Hz (interrupt clock?)
   - GPS
     - Make sure that parsed data can be saved
+  - BMP390
+    - Data interrupt
   - BNO085
-    - Check goofy data
     - Integrate. Compare between accelerometers.
       - (Combine MPU-6050 acceleration and BNO orientation and integrate. Subtracting gravitation needed)
+        - Data interrupt
+    - Data interrupt
   - Fix safety system when power drops (interrupt)
   - Safety system for when sensors return NULL, the weight should be zero
   - Sensor fusion
@@ -34,9 +37,9 @@ Completed (software):
   - GPS
     - ...
   - BMP390
-    - ...
+    - Kalman filtering, 50 Hz
   - BNO085
-    - ...
+    - Checked goofy data, not goofy anymore. Position drifts 20m/2min at rest; 20m/~3s when moved.
 
 To do list (hardware):
   - New 3D-design for printing
@@ -47,8 +50,7 @@ To do list (hardware):
   - Safety circuit (capacitor)
 
 Completed (hardware):
-  - BMP390
-    - Kalman filtering, 50 Hz
+  - ...
 
 */
 
