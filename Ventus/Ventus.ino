@@ -53,10 +53,12 @@ Completed (hardware):
   -
 
 */
+
 #include <Arduino.h>
 #include <Adafruit_BNO08x.h>
 
 #define BNO08X_RESET -1
+
 
 struct euler_t {
   float yaw;
@@ -69,6 +71,7 @@ struct euler_t2 {
   float pitch;
   float roll;
 } ypr2;
+
 
 Adafruit_BNO08x  bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
@@ -83,6 +86,7 @@ float vel_z = 0;
 float pos_x = 0;
 float pos_y = 0;
 float pos_z = 0;
+
 
 void setReports() {
   Serial.println("Setting desired reports");
@@ -99,6 +103,7 @@ void setReports() {
     Serial.println("Could not enable linear acceleration");
   }
 }
+
 
 void setup(void) {
 
@@ -122,6 +127,7 @@ void setup(void) {
   delay(100);
 }
 
+
 void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, bool degrees = false) {
 
     float sqr = sq(qr);
@@ -140,6 +146,7 @@ void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, boo
     }
 }
 
+
 void quaternionToEuler2(float qr, float qi, float qj, float qk, euler_t2* ypr2, bool degrees = false) {
 
     float sqr = sq(qr);
@@ -157,6 +164,7 @@ void quaternionToEuler2(float qr, float qi, float qj, float qk, euler_t2* ypr2, 
       ypr2->roll *= RAD_TO_DEG;
     }
 }
+
 
 void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, euler_t* ypr, bool degrees = false) {
     quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, ypr, degrees);
@@ -195,22 +203,27 @@ void loop() {
         acc_y = sensorValue.un.linearAcceleration.y;
         acc_z = sensorValue.un.linearAcceleration.z;
 
-        deltaTime = (micros() - lastUpdate) / 1000000;
-        pos_x += vel_x * deltaTime + acc_x * pow(deltaTime, 2) / 2;
-        pos_y += vel_y * deltaTime + acc_y * pow(deltaTime, 2) / 2;
-        pos_z += vel_z * deltaTime + acc_z * pow(deltaTime, 2) / 2;
+        deltaTime = (micros() - lastUpdate);
+        pos_x += vel_x * deltaTime / 1000000 + acc_x * pow(deltaTime / 1000000, 2) / 2;
+        pos_y += vel_y * deltaTime / 1000000 + acc_y * pow(deltaTime / 1000000, 2) / 2;
+        pos_z += vel_z * deltaTime / 1000000 + acc_z * pow(deltaTime / 1000000, 2) / 2;
 
-        vel_x += acc_x * deltaTime;
-        vel_y += acc_y * deltaTime;
-        vel_z += acc_z * deltaTime;
+        vel_x += acc_x * deltaTime / 1000000;
+        vel_y += acc_y * deltaTime / 1000000;
+        vel_z += acc_z * deltaTime / 1000000;
 
         lastUpdate += deltaTime;
+
+        if (abs(pos_x) > 20 || abs(pos_y) > 20 || abs(pos_z) > 20) {
+          reset();
+        }
 
         printData(" (Linear acceleration)");
         break;
     }
   }
 }
+
 
 void printData(const char type[]) {
   Serial.println("");
@@ -251,4 +264,15 @@ void printData(const char type[]) {
   Serial.print(pos_x);  Serial.print(", ");
   Serial.print(pos_y);  Serial.print(", ");
   Serial.println(pos_z);
+}
+
+
+void reset() {
+  vel_x = 0;
+  vel_y = 0;
+  vel_z = 0;
+  
+  pos_x = 0;
+  pos_y = 0;
+  pos_z = 0;
 }
