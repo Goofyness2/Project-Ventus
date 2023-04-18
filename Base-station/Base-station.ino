@@ -85,15 +85,6 @@ void loop() {
       Serial.println((char*)buf);
       Serial.print("RSSI: ");
       Serial.println(rf69.lastRssi(), DEC);
-
-      if (strstr((char *)buf, "Hello World")) {
-        // Send a reply!
-        uint8_t data[] = "And hello back to you";
-        rf69.send(data, sizeof(data));
-        rf69.waitPacketSent();
-        Serial.println("Sent a reply");
-        // Blink(LED, 40, 3); //blink LED 3 times, 40ms between blinks
-      }
     } else {
       Serial.println("Receive failed");
     }
