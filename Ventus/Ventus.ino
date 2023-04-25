@@ -160,8 +160,8 @@ void loop() {
   zRotVel = g.gyro.z + 0.0365;
 
   xRot += (xRotVel) * millis() / 1000;
-  yRot += (yRotVel) * millis() / 1000;;
-  zRot += (zRotVel) * millis() / 1000;;
+  yRot += (yRotVel) * millis() / 1000;
+  zRot += (zRotVel) * millis() / 1000;
 
   xAcc = a.acceleration.x - 0.07;
   yAcc = a.acceleration.y + 2.9;
