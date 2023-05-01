@@ -1,5 +1,10 @@
 import serial
 import matplotlib.pyplot as plt
+import numpy as np
+
+import matplotlib
+matplotlib.use('Qt5Agg')  # Replace 'Qt5Agg' with the backend of your choice
+
 
 # Set up the serial connection
 ser = serial.Serial('/dev/ttyUSB0', 115200)
@@ -24,15 +29,15 @@ ydata = []
 # Loop indefinitely
 while True:
     # Read a line of data from the serial port
-    line = ser.readline().decode().strip()
+    line_data = ser.readline().decode().strip()
 
     # Parse the data as an integer
-    value = int(line)
+    value = int(line_data)
 
     # Add the data to the plot
     xdata.append(len(xdata))
     ydata.append(value)
-    line.set_data(xdata, ydata)
+    line.set_data(np.array(xdata), np.array(ydata))
 
     # Update the plot
     plt.draw()
