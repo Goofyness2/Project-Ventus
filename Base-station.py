@@ -1,7 +1,7 @@
-import serial
 import matplotlib.pyplot as plt
 import numpy as np
 import re
+import serial
 
 pattern = r'^-?\d+\.\d+,-?\d+\.\d+,-?\d+\.\d+$'
 
@@ -10,33 +10,34 @@ matplotlib.use('Qt5Agg')
 
 
 # Set up the serial connection
-ser = serial.Serial('/dev/ttyUSB1', 115200)
+ser = serial.Serial('/dev/ttyUSB0', 115200)
 
 # Set up the plot
 plt.ion()
-fig, ax = plt.subplots()
-line, = ax.plot([], [])
+ax = plt.axes(projection = "3d")
 
 # Set the axis labels
-ax.set_xlabel('Time (s)')
-ax.set_ylabel('Value')
+ax.set_xlabel('Long (m)')
+ax.set_ylabel('Lat (m)')
+ax.set_zlabel('Alt (m)')
 
 # Set the axis limits
-ax.set_xlim(0, 10)
-ax.set_ylim(-20, 20)
+ax.set_xlim(-30, 30)
+ax.set_ylim(-30, 30)
+ax.set_zlim(-30, 30)
 
-# Initialize the data
-xdata = []
-ydata = []
+# # Initialize the data
+# xdata = []
+# ydata = []
 
 arr = np.empty((0, 3), float)
 
-def on_close(event):
-    print('Plot window closed.')
-    plt.close()  # Close the window programatically
-    exit()  # Terminate the program
+# def on_close(event):
+#     print('Plot window closed.')
+#     plt.close()  # Close the window programatically
+#     exit()  # Terminate the program
 
-fig.canvas.mpl_connect('close_event', on_close)
+# fig.canvas.mpl_connect('close_event', on_close)
 
 # Loop indefinitely
 while True:
@@ -47,7 +48,7 @@ while True:
         row = np.array(line_data.split(","), dtype=float)
         arr = np.vstack([arr, row])
     
-    print(row)
+    ax.scatter(arr[:, 0], arr[:, 1], arr[:, 2])
 
     # # Parse the data as an integer
     # value = float(line_data)
@@ -60,4 +61,5 @@ while True:
     # # Update the plot
     # ax.set_xlim(min(xdata), max(xdata) + 1)
     # plt.draw()
+    # plt.show()
     plt.pause(0.01)
