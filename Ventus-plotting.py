@@ -51,7 +51,7 @@ def update_plot(frame):
     xs = [d[0] for d in data]
     ys = [d[1] for d in data]
     zs = [d[2] for d in data]
-    ax.scatter(xs, ys, zs)
+    ax.plot(xs, ys, zs)
 
     plt.draw()
 
@@ -78,4 +78,5 @@ plot_open = True
 
 # Wait until the plot window is closed
 while plot_open:
-    plt.pause(0.1)
+    plt.pause(1)
+    print(arr[-1])
