@@ -4,8 +4,8 @@ import re
 import serial
 from collections import deque
 import threading
-import time
-from matplotlib.animation import FuncAnimation
+import sys
+from matplotlib.animation import FuncAnimation as funcAnimation
 
 pattern = r'^-?\d+\.\d+,-?\d+\.\d+,-?\d+\.\d+$'
 
@@ -23,11 +23,6 @@ ax = fig.add_subplot(111, projection="3d")
 ax.set_xlabel('Long (m)')
 ax.set_ylabel('Lat (m)')
 ax.set_zlabel('Alt (m)')
-
-# Set the axis limits
-# ax.set_xlim(-30, 30)
-# ax.set_ylim(-30, 30)
-# ax.set_zlim(-30, 30)
 
 # Use a deque to store the data
 arr = deque(maxlen=1000)
@@ -52,29 +47,35 @@ def update_plot(frame):
     ax.set_ylabel('Lat (m)')
     ax.set_zlabel('Alt (m)')
 
-    # Set the axis limits
-    # ax.set_xlim(-30, 30)
-    # ax.set_ylim(-30, 30)
-    # ax.set_zlim(-30, 30)
-
     # Plot the data
     xs = [d[0] for d in data]
     ys = [d[1] for d in data]
     zs = [d[2] for d in data]
     ax.scatter(xs, ys, zs)
 
-    # Check if the plot window is still open
-    if not plt.fignum_exists(fig.number):
-        print("Plot window closed.")
-        ser.close()
-        sys.exit()
-
     plt.draw()
+
+# Define a custom event handler function for the "close event" of the plot window
+def on_close(event):
+    global plot_open
+    plot_open = False
+    print("Plot window closed.")
+    ser.close()
+    sys.exit()
+
+# Register the custom event handler function using fig.canvas.mpl_connect()
+fig.canvas.mpl_connect('close_event', on_close)
 
 # Start a separate thread to read data from the serial port
 thread = threading.Thread(target=read_data)
 thread.start()
 
 # Update the plot using FuncAnimation
-ani = matplotlib.animation.FuncAnimation(fig, update_plot, interval=100)
-plt.show()
+ani = funcAnimation(fig, update_plot, interval=100)
+
+# Set the global flag to indicate that the plot window is still open
+plot_open = True
+
+# Wait until the plot window is closed
+while plot_open:
+    plt.pause(0.1)
