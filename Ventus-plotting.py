@@ -7,7 +7,7 @@ import threading
 import sys
 from matplotlib.animation import FuncAnimation as funcAnimation
 
-pattern = r'^-?\d+\.\d+,-?\d+\.\d+,-?\d+\.\d+$'
+pattern = r'^-?\d+\.\d+,-?\d+\.\d+,-?\d+\.\d+,\d+$'
 
 import matplotlib
 matplotlib.use('Qt5Agg')
