@@ -1,0 +1,238 @@
+#include <Arduino.h>
+#include <Adafruit_BNO08x.h>
+#include <Adafruit_Sensor.h>
+#include <math.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 64  // OLED display height, in pixels
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// For SPI mode, we need a CS pin
+#define BNO08X_CS 10
+#define BNO08X_INT 9
+
+// For SPI mode, we also need a RESET
+//#define BNO08X_RESET 5
+// but not for I2C or UART
+#define BNO08X_RESET -1
+
+Adafruit_BNO08x bno08x(BNO08X_RESET);
+sh2_SensorValue_t sensorValue;
+float q0, q1, q2, q3;
+
+float tick;
+
+const float FOV = 60;
+
+const float CAMERA_X = 1, CAMERA_Y = 0, CAMERA_Z = 0, CAMERA_FOCAL_POINT = tan(90 - ((FOV / 180.0 / PI) / 2));
+
+struct Point {
+  float x;
+  float y;
+  float z;
+};
+const int POINTS_ARRAY_SIZE = 10;
+
+Point points[POINTS_ARRAY_SIZE] = {
+  { -0.5, -0.5, -0.5 },
+  { 0.5, -0.5, -0.5 },
+  { -0.5, 0.5, -0.5 },
+  { -0.5, -0.5, 0.5 },
+  { 0.5, 0.5, -0.5 },
+  { 0.5, -0.5, 0.5 },
+  { -0.5, 0.5, 0.5 },
+  { 0.5, 0.5, 0.5 },
+  { 0, 1, 0 },
+  { 0, 0, 0 }
+};
+
+struct PointOnScreen {
+  float x;
+  float y;
+};
+const int POINTS_ON_SCRREN_ARRAY_SIZE = POINTS_ARRAY_SIZE;
+
+PointOnScreen pointsOnScreen[POINTS_ON_SCRREN_ARRAY_SIZE];
+
+struct Line {
+  int fromIndex;
+  int toIndex;
+};
+
+const int LINES_ARRAY_SIZE = 13;
+
+Line lines[LINES_ARRAY_SIZE] = {
+  { 0, 1 },
+  { 0, 2 },
+  { 0, 3 },
+  { 1, 4 },
+  { 1, 5 },
+  { 2, 4 },
+  { 2, 6 },
+  { 3, 5 },
+  { 3, 6 },
+  { 4, 7 },
+  { 5, 7 },
+  { 6, 7 },
+  { 8, 9 }
+};
+
+void setup(void) {
+  Serial.begin(115200);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // Initialize with the I2C address 0x3C
+  display.setTextColor(SSD1306_WHITE);        // Set text color to white
+  display.setTextSize(1);                     // Set text size to 1
+
+  Serial.println("Adafruit BNO08x test!");
+
+  // Try to initialize!
+  if (!bno08x.begin_I2C()) {
+    //if (!bno08x.begin_UART(&Serial1)) {  // Requires a device with > 300 byte UART buffer!
+    //if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
+    Serial.println("Failed to find BNO08x chip");
+    while (1) { delay(10); }
+  }
+  Serial.println("BNO08x Found!");
+
+  for (int n = 0; n < bno08x.prodIds.numEntries; n++) {
+    Serial.print("Part ");
+    Serial.print(bno08x.prodIds.entry[n].swPartNumber);
+    Serial.print(": Version :");
+    Serial.print(bno08x.prodIds.entry[n].swVersionMajor);
+    Serial.print(".");
+    Serial.print(bno08x.prodIds.entry[n].swVersionMinor);
+    Serial.print(".");
+    Serial.print(bno08x.prodIds.entry[n].swVersionPatch);
+    Serial.print(" Build ");
+    Serial.println(bno08x.prodIds.entry[n].swBuildNumber);
+  }
+
+  setReports();
+
+  Serial.println("Reading events");
+  delay(100);
+}
+
+// Here is where you define the sensor outputs you want to receive
+void setReports(void) {
+  Serial.println("Setting desired reports");
+  if (!bno08x.enableReport(SH2_GAME_ROTATION_VECTOR)) {
+    Serial.println("Could not enable game vector");
+  }
+}
+
+void rotateVectorWithQuaternion(float *vector, float *quaternion) {
+  // Convert the quaternion to a rotation matrix
+  float rotMatrix[3][3];
+  rotMatrix[0][0] = 1 - 2 * (quaternion[2] * quaternion[2] + quaternion[3] * quaternion[3]);
+  rotMatrix[0][1] = 2 * (quaternion[1] * quaternion[2] - quaternion[0] * quaternion[3]);
+  rotMatrix[0][2] = 2 * (quaternion[1] * quaternion[3] + quaternion[0] * quaternion[2]);
+  rotMatrix[1][0] = 2 * (quaternion[1] * quaternion[2] + quaternion[0] * quaternion[3]);
+  rotMatrix[1][1] = 1 - 2 * (quaternion[1] * quaternion[1] + quaternion[3] * quaternion[3]);
+  rotMatrix[1][2] = 2 * (quaternion[2] * quaternion[3] - quaternion[0] * quaternion[1]);
+  rotMatrix[2][0] = 2 * (quaternion[1] * quaternion[3] - quaternion[0] * quaternion[2]);
+  rotMatrix[2][1] = 2 * (quaternion[2] * quaternion[3] + quaternion[0] * quaternion[1]);
+  rotMatrix[2][2] = 1 - 2 * (quaternion[1] * quaternion[1] + quaternion[2] * quaternion[2]);
+
+  // Multiply the rotation matrix with the vector to get the rotated vector
+  float result[3] = { 0 };
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      result[i] += rotMatrix[i][j] * vector[j];
+    }
+  }
+
+  // Update the input vector array with the rotated values (switch x and y components)
+  vector[0] = result[1];
+  vector[1] = result[0];
+  vector[2] = result[2];
+}
+
+void drawPoints() {
+  for (int i = 0; i < POINTS_ARRAY_SIZE; i++) {
+    float vector[3] = { points[i].x, points[i].y, points[i].z };  // Define the input vector
+    float quaternion[4] = { q0, q1, q2, q3 };
+    rotateVectorWithQuaternion(vector, quaternion);  // Rotate the vector using the quaternion
+
+    float delta_x = vector[0] - CAMERA_X;
+    float delta_y = vector[1] - CAMERA_Y;
+    float delta_z = vector[2] - CAMERA_Z;
+
+    int x_screen = CAMERA_FOCAL_POINT * (delta_y / (-delta_x - CAMERA_FOCAL_POINT)) * SCREEN_HEIGHT / 2 + SCREEN_WIDTH / 2;
+    int y_screen = CAMERA_FOCAL_POINT * (delta_z / (-delta_x - CAMERA_FOCAL_POINT)) * SCREEN_HEIGHT / 2 + SCREEN_HEIGHT/ 2;
+
+    if (x_screen >= 0 && x_screen <= SCREEN_WIDTH && y_screen >= 0 && y_screen <= SCREEN_HEIGHT) {
+      pointsOnScreen[i].x = x_screen;
+      pointsOnScreen[i].y = y_screen;
+      if (i == 8) {
+        display.fillCircle(x_screen, y_screen, 1.5, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+void drawLines() {
+  for (int i = 0; i < LINES_ARRAY_SIZE; i++) {
+    float start_x = pointsOnScreen[lines[i].fromIndex].x;
+    float start_y = pointsOnScreen[lines[i].fromIndex].y;
+    float end_x = pointsOnScreen[lines[i].toIndex].x;
+    float end_y = pointsOnScreen[lines[i].toIndex].y;
+
+    if (start_x != NULL && start_y != NULL && end_x != NULL && end_y != NULL) {
+      display.drawLine(start_x, start_y, end_x, end_y, SSD1306_WHITE);
+    }
+  }
+}
+
+void loop() {
+  delay(10);
+
+  if (bno08x.wasReset()) {
+    Serial.print("sensor was reset ");
+    setReports();
+  }
+
+  if (!bno08x.getSensorEvent(&sensorValue)) {
+    return;
+  }
+
+  switch (sensorValue.sensorId) {
+
+    case SH2_GAME_ROTATION_VECTOR:
+      q0 = sensorValue.un.gameRotationVector.real;
+      q1 = sensorValue.un.gameRotationVector.i;
+      q2 = sensorValue.un.gameRotationVector.j;
+      q3 = sensorValue.un.gameRotationVector.k;
+      float quaternion[4] = { q0, q1, q2, q3 };
+
+      float vector[3] = { 0, 1, 0 };  // Define the input vector
+
+      rotateVectorWithQuaternion(vector, quaternion);  // Rotate the vector using the quaternion
+
+      display.clearDisplay();   // Clear the display buffer
+      display.setCursor(0, 0);  // Set cursor position to (0, 0)
+
+      display.println("r: " + String(q0));
+      display.println("i: " + String(q1));
+      display.println("j: " + String(q2));
+      display.println("k: " + String(q3));
+
+      drawPoints();
+      drawLines();
+
+      /*
+      CAMERA_Y = 0.5 + 1 * sin(tick);
+      CAMERA_Z = 0.5 + 1 * cos(tick);
+      tick += 0.1;
+      */
+
+      display.display();  // Update the display
+
+      break;
+  }
+}
