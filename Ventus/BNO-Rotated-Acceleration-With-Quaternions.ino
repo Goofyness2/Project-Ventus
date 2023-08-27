@@ -1,17 +1,21 @@
 #include <Arduino.h>
 #include <Adafruit_BNO08x.h>
 #include <Adafruit_Sensor.h>
-#include <Wire.h>
+#include <Adafruit_NeoPixel.h>
 #include <Ticker.h>
+#include <Wire.h>
 
 int16_t packetnum = 0;  // packet counter, we increment per xmission
 
 // For SPI mode, we need a CS pin
 #define BNO08X_CS 27
 #define BNO08X_INT 15
-
-// For SPI mode, we also need a RESET
 #define BNO08X_RESET 14
+
+#define PIN 0
+#define NUMPIXELS 1
+
+Adafruit_NeoPixel LED(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
 struct euler_t {
   float yaw;
@@ -22,19 +26,21 @@ struct euler_t {
 Adafruit_BNO08x bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
-float acc_x, acc_y, acc_z, q0, q1, q2, q3;
+float acc_x, acc_y, acc_z, q0, q1, q2, q3, x_color_factor, y_color_factor, z_color_factor;
 
 bool FlipFlop;
 
 unsigned long first_micros, second_micros, last_micros;
 
 int decimal_places = 4;
-
 const float IMU_INTERVAL = 0.005;  // 400 Hz interval
 Ticker tickerIMU;
 
 void setup() {
   Serial.begin(115200);
+
+  LED.begin();
+  LED.show();
 
   if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
     Serial.println("Couldn't initialize BNO085!");
@@ -94,26 +100,34 @@ void IMU_INTERRUPT() {
 
         float vector[3] = { acc_x, acc_y, acc_z };
         float quaternion[4] = { q0, q1, q2, q3 };
-
         rotateVectorWithQuaternion(vector, quaternion);
+
+        /*  Visualize Accelerometer Vector with LED
+        x_color_factor = 1 / (1 + (pow(vector[0], 2) / 50));
+        y_color_factor = 1 / (1 + (pow(vector[1], 2) / 50));
+        z_color_factor = 1 / (1 + (pow(vector[2], 2) / 50));
+
+        LED.setPixelColor(0, LED.Color(255 * (1 - x_color_factor), 255 * (1 - y_color_factor), 255 * (1 - z_color_factor)));
+        LED.show();
+        */
 
         float delta_micros = second_micros - first_micros;
         Serial.print(micros() - last_micros);
         last_micros = micros();
 
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(vector[0], decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(vector[1], decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(vector[2], decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(q0, decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(q1, decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.print(q2, decimal_places);
-        Serial.print(", ");
+        Serial.print("\t");
         Serial.println(q3, decimal_places);
 
         FlipFlop = false;
