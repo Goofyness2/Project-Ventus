@@ -102,14 +102,13 @@ void IMU_INTERRUPT() {
         float quaternion[4] = { q0, q1, q2, q3 };
         rotateVectorWithQuaternion(vector, quaternion);
 
-        /*  Visualize Accelerometer Vector with LED
+        Visualize Accelerometer Vector with LED
         x_color_factor = 1 / (1 + (pow(vector[0], 2) / 50));
         y_color_factor = 1 / (1 + (pow(vector[1], 2) / 50));
         z_color_factor = 1 / (1 + (pow(vector[2], 2) / 50));
 
         LED.setPixelColor(0, LED.Color(255 * (1 - x_color_factor), 255 * (1 - y_color_factor), 255 * (1 - z_color_factor)));
         LED.show();
-        */
 
         float delta_micros = second_micros - first_micros;
         Serial.print(micros() - last_micros);

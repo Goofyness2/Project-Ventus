@@ -1,0 +1,98 @@
+import csv
+import os
+import math
+
+# Tuner Settings
+num_steps_Q = 10
+Q_start_val = 0.001
+Q_end_val = 10
+
+num_steps_k = 10
+k_start_val = 0.5
+k_end_val = 1.5
+
+# KF Init
+Q = Q_start_val
+k = k_start_val
+GPS_R = 3 * 3
+BMP_R = 0.5 * 0.5
+
+GPS_P = [0]
+BMP_P = [0]
+
+tune_data = [0 for i in range(8)]
+
+def kalmanFilter(i, P, R, Q):
+    # Use the values directly in calculations
+    pred_x = tune_data[i + 5] + row[8 + i] * (row[1] / 1000)
+    pred_P = P + Q
+
+    # Update
+    pred_res = row[17 + i] - pred_x
+    K = P / (P + R)
+    tune_data[i + 5] = pred_x + K * pred_res
+    if i == 2:
+        BMP_P[0] = (1 - K) * P + Q
+    else:
+        GPS_P[0] = (1 - K) * P + Q
+
+# Specify the directory for saving the CSV files
+csv_directory = r'C:\Users\ollem\OneDrive\Documents\Project Ventus\VENTUS_data'
+file_name = 'KF_Tune_log_'
+
+# Initialize a counter for generating unique filenames
+file_counter = 1
+
+while True:
+    # Construct the CSV filename with the counter
+    csv_filename = f'{file_name}{file_counter}.csv'
+    csv_file_path = os.path.join(csv_directory, csv_filename)
+
+    # Check if the file already exists
+    if not os.path.exists(csv_file_path):
+        break
+
+    # If it exists, increment the counter and try again
+    file_counter += 1
+
+filename = r'C:\Users\ollem\OneDrive\Documents\Project Ventus\VENTUS_data\Kalman_Kalibrering_Vid_Skolan_1\Py_log_1.csv'
+
+for i in range(num_steps_Q):
+    for i in range(num_steps_k):
+        with open(filename, 'r') as csvfile:
+            datareader = csv.reader(csvfile)
+
+            for i in range(91):
+                next(datareader)
+            
+            first_row = next(datareader)
+            
+            # Convert all values in each row to floats
+            data = [[float(value) for value in row] for row in datareader]
+            
+            for row in data:
+                try:
+                    for i in range(3):
+                        if i == 2:
+                            kalmanFilter(i, BMP_P[0], BMP_R * k, Q)
+                        else:
+                            kalmanFilter(i, GPS_P[0], GPS_R * k, Q)
+                except StopIteration:
+                    break
+        tune_data = [Q, k, first_row[2], first_row[3], first_row[4], tune_data[5], tune_data[6], tune_data[7]]
+        
+        
+        with open(csv_file_path, 'a', newline='') as file:
+            writer = csv.writer(file, delimiter=",")
+            writer.writerow(tune_data)
+
+        print(tune_data)
+
+        GPS_P[0] = 0
+        BMP_P[0] = 0
+
+        tune_data = [0 for i in range(8)]
+
+        k += (k_end_val - k_start_val) / (num_steps_k - 1)
+    Q += (Q_end_val - Q_start_val) / (num_steps_Q - 1)
+    k = k_start_val
