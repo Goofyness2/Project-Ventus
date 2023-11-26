@@ -72,9 +72,11 @@ bool button_active = true;
 // Singleton instance of the radio driver
 //RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-int radio_freq = 1;
-const char packet_data_seperator[] = ", ";
+String packet_data_seperator = "\t";
 int radio_timer;
+int radio_freq = 1;
+int radio_packet_num;
+
 
 // BMP Setup
 #define BMP_CS 4
@@ -84,6 +86,8 @@ Adafruit_BMP3XX bmp;
 
 const float BMP_Stdev = 0.5;
 float BMP_alt, last_BMP_alt, BMP_alt_vel;
+int BMP_freq = 10;
+int BMP_timer;
 
 // Thermistor Setup
 int analogValue;
@@ -134,9 +138,6 @@ Adafruit_GPS GPS(&GPSSerial);
 #define GPSECHO false
 
 const float GPS_Stdev = 3;
-
-const float GPS_INTERVAL = 0.1;  // 10 Hz interval
-Ticker tickerGPS;
 
 unsigned long last_millis;
 
@@ -292,6 +293,10 @@ void setupRadio() {
   } else {
     Serial.println("Starting LoRa successful!");
   }
+
+  //LoRa.setSpreadingFactor(12);
+  //LoRa.setSignalBandwidth(125E3);
+  LoRa.setTxPower(20);
 }
 
 void setupBMP() {
@@ -787,9 +792,13 @@ void sendRadioPacket() {
   */
 
   LoRa.beginPacket();
+  LoRa.print(radio_packet_num);
+  LoRa.print(",");
   LoRa.print(BMP_alt);
-  LoRa.endPacket();
+  LoRa.endPacket(true);
 
+  radio_packet_num++;
+  
   /*
   //String data = "Temp: " + String(temperature) + "  Alt: " + String(BMP_alt) + " Lat: " + String(GPS_lat, 6) + " Lon: " + String(GPS_lon, 6);
   String data = "test";
@@ -809,7 +818,6 @@ void sendRadioPacket() {
 void DHTask( void * parameter ) {
   for(;;) {
     //Serial.println(uxTaskGetStackHighWaterMark(NULL));
-
 
     checkCommand();
     if (ENABLE_GPS) {
@@ -834,12 +842,6 @@ void DHTask( void * parameter ) {
         Serial.println(" microseconds");
 
         digitalWrite(STATUS_LED, HIGH);
-      }
-      if (ENABLE_BMP) {
-        BMP_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
-        BMP_alt -= kalman_offset_z;  
-        BMP_alt_vel = (BMP_alt - last_BMP_alt) / GPS_INTERVAL;
-        last_BMP_alt = BMP_alt;
       }
 
       if (ENABLE_TRM) {
@@ -902,5 +904,16 @@ void DHTask( void * parameter ) {
 }
 
 void loop() {
-  
+  if (millis() - BMP_timer > 1000 / BMP_freq) {
+    if (ENABLE_BMP) {
+      BMP_timer = millis();
+      BMP_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+      BMP_alt -= kalman_offset_z;  
+      BMP_alt_vel = (BMP_alt - last_BMP_alt) * 10;
+      last_BMP_alt = BMP_alt;
+
+      Serial.print("Altitude is: ");
+      Serial.println(BMP_alt);
+    }
+  }
 }
