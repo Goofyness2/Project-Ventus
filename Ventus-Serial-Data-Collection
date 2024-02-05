@@ -1,0 +1,73 @@
+import serial
+import csv
+import time
+import os
+
+# Define the serial port and baud rate for your Arduino
+arduino_port = 'COM11'  # Replace 'COMX' with the actual COM port of your Arduino
+baud_rate = 115200
+
+# Specify the directory for saving the CSV files
+csv_directory = r'C:\Users\ollem\OneDrive\Documents\Project Ventus\VENTUS_data'
+
+# Initialize a counter for generating unique filenames
+file_counter = 1
+
+while True:
+    # Construct the CSV filename with the counter
+    csv_filename = f'Py_logger_test{file_counter}.csv'
+    csv_file_path = os.path.join(csv_directory, csv_filename)
+
+    # Check if the file already exists
+    if not os.path.exists(csv_file_path):
+        break
+
+    # If it exists, increment the counter and try again
+    file_counter += 1
+
+# Open the serial connection to the Arduino
+try:
+    arduino = serial.Serial(arduino_port, baud_rate)
+    print(f"Connected to {arduino_port} at {baud_rate} baud.")
+
+    arduino.write(b'r')
+    print("Command 'r' sent through serial.")
+except serial.SerialException:
+    print(f"Failed to connect to {arduino_port}. Please check the port and baud rate.")
+    exit()
+
+logging_active = True
+data_delimiter = ","
+
+# Create a new CSV file for logging
+try:
+    while logging_active:
+        # Read data from the Arduino
+        data = arduino.readline().decode().strip()
+        if data == 'Waiting for command...':
+            print(f"Data successfully exported to: {csv_file_path}")
+        elif data:
+            try:
+                values = [float(val) for val in data.split(data_delimiter)]
+
+                # Log the data into the CSV file
+                with open(csv_file_path, 'a', newline='') as file:
+                    writer = csv.writer(file, delimiter=data_delimiter)
+                    writer.writerow(values)
+
+                print(f"{values}")
+            except ValueError:
+                # Splitting or converting to float failed
+                print(f"Failed to parse data: {data}")
+
+except KeyboardInterrupt:
+    print("Logging terminated by user.")
+    logging_active = False  # Set the flag to exit the logging loop
+
+finally:
+    answer = input("Delete file onboard ESP? [Y:N] ")
+    print("Command 'd' sent through serial.")  # Moved this line before closing the serial connection
+    if answer == 'Y':
+        arduino.write(b'd')
+    arduino.close()
+
