@@ -3,30 +3,37 @@
 #include <Adafruit_BNO08x.h>
 #include <Adafruit_GPS.h>
 #include <Adafruit_Sensor.h>
-//#include <Adafruit_NeoPixel.h>
+#include <Adafruit_NeoPixel.h>
+#include "FS.h"
+#include "SPIFFS.h"
 #include "SD.h"
 #include <SPI.h>
 #include <math.h>
 //#include <RH_RF95.h>
 #include <LoRa.h>
+#include <Linear_Algebra.h>  // Include the library first
+#include <include/linalg/HouseholderQR.hpp>
+#include <include/linalg/Matrix.hpp>
+#include <include/linalg/Arduino/ArduinoCout.hpp>
 #include <Ticker.h>
 #include <Wire.h>
+
+using arduino::cout;
 
 // Serial config
 int decimal_places = 4;
 String data_seperator = "\t";
 
-/*
 // NeoPixel
 #define PIN 0
 #define NUMPIXELS 1
 Adafruit_NeoPixel LED(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
-*/
 
 // File system setup
 #define SD_CS_PIN 14
 String FILE_NAME = "/data.csv";
 File myFile;
+File flashFile;
 
 char data_char[200];
 
@@ -53,13 +60,22 @@ struct data_struct {
   float BMP_alt;
 };
 
-const int dataArraySize = 50;
+const int dataArraySize = 25;
 data_struct data[dataArraySize];
 int writing_index;
 
-const int buttonPin = 38;
-volatile bool button_pressed = false;
-bool button_active = true;
+struct flash_struct {
+  float k_x;
+  float k_y;
+  float k_z;
+  float raw_x;
+  float raw_y;
+  float raw_z;
+};
+
+flash_struct f_data[dataArraySize];
+
+volatile bool command_active = false;
 
 // Radio setup
 #define RFM95_CS 25
@@ -77,7 +93,6 @@ int radio_timer;
 int radio_freq = 1;
 int radio_packet_num;
 
-
 // BMP Setup
 #define BMP_CS 4
 #define SEALEVELPRESSURE_HPA (1013.25)
@@ -85,7 +100,7 @@ int radio_packet_num;
 Adafruit_BMP3XX bmp;
 
 const float BMP_Stdev = 0.5;
-float BMP_alt, last_BMP_alt, BMP_alt_vel;
+float BMP_start_alt, BMP_alt, last_BMP_alt, BMP_alt_vel;
 int BMP_freq = 10;
 int BMP_timer;
 
@@ -118,7 +133,8 @@ Adafruit_BNO08x bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
 // Interrupt
-const float IMU_INTERVAL = 0.005;
+const float IMU_FREQ = 100;
+const float IMU_INTERVAL = 1 / (2 * IMU_FREQ);  // Two times because the interrupt uses flip flop
 Ticker tickerIMU;
 
 // Variables
@@ -154,47 +170,192 @@ const float radius_pole = 6371001;
 // Status LED pin
 #define STATUS_LED 22
 
-// Kalman filter parameters
-const float IMU_R = pow(GPS_Stdev, 2);  // IMU Measurement noise covariance
-const float BMP_R = pow(BMP_Stdev, 2);  // BMP Measurement noise covariance
-const float Q = 0.01;                   // Process noise covariance
+// Kalman filter
+float dt = 1 / IMU_FREQ;
+float dt_2 = pow(dt, 2) / 2;
+float dt2 = pow(dt, 2);
+float dt_4 = pow(dt_2, 2);
+float dt_3 = pow(dt, 3) / 2;
 
-float IMU_K = 0;  // IMU Inital Kalman gain
-float IMU_P = 0;  // IMU Initial error covariance
+float t = 0;
 
-float BMP_K = 0;  // BMP Inital Kalman gain
-float BMP_P = 0;  // BMP Initial error covariance
+int tick;
 
-float kalman_x = 0;  // Inital state estimate along x-axis
-float kalman_y = 0;  // Inital state estimate along y-axis
-float kalman_z = 0;  // Inital state estimate along z-axis
+const float acc_std = 0.35 / 1.96;
+const float acc_var = pow(acc_std, 2);
 
-const float CORRECTION_MAGNITUDE = 0.1;  // (m/s)/s
+const float gps_std = 3 / 1.96;
+const float gps_pos_var = pow(gps_std, 2);
+const float gps_vel_std = 0.1 / 1.96;
+const float gps_vel_var = pow(gps_vel_std, 2);
+const float bmp_std = 0.25 / 1.96;
+const float bmp_pos_var = pow(bmp_std, 2);
+
+Matrix F = {
+  { 1, 0, 0, dt, 0, 0 },
+  { 0, 1, 0, 0, dt, 0 },
+  { 0, 0, 1, 0, 0, dt },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 0, 1 },
+};
+
+Matrix F_T = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 0 },
+  { dt, 0, 0, 1, 0, 0 },
+  { 0, dt, 0, 0, 1, 0 },
+  { 0, 0, dt, 0, 0, 1 },
+};
+
+Vector x = {
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+};
+
+Matrix B = {
+  { dt_2, 0, 0 },
+  { 0, dt_2, 0 },
+  { 0, 0, dt_2 },
+  { dt, 0, 0 },
+  { 0, dt, 0 },
+  { 0, 0, dt },
+};
+
+Vector u = {
+  { 0 },
+  { 0 },
+  { 0 },
+};
+
+Matrix P = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 0 },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 0, 1 },
+};
+
+float sigma_2_dt_4 = acc_var * dt_4;
+float sigma_2_dt2 = acc_var * dt2;
+float sigma_2_dt_3 = acc_var * dt_3;
+
+Matrix Q = {
+  { sigma_2_dt_4, 0, 0, sigma_2_dt_3, 0, 0 },
+  { 0, sigma_2_dt_4, 0, 0, sigma_2_dt_3, 0 },
+  { 0, 0, sigma_2_dt_4, 0, 0, sigma_2_dt_3 },
+  { sigma_2_dt_3, 0, 0, sigma_2_dt2, 0, 0 },
+  { 0, sigma_2_dt_3, 0, 0, sigma_2_dt2, 0 },
+  { 0, 0, sigma_2_dt_3, 0, 0, sigma_2_dt2 },
+};
+
+Vector z = {
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+};
+
+Matrix H = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 0 },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 0, 1 },
+};
+
+Matrix H_T = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 0 },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 0, 1 },
+};
+
+Matrix C = {
+  { 1, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0 },
+  { 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 1 },
+  { 0, 0, 1, 0, 0 },
+};
+
+Matrix C_T = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 1 },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+};
+
+Matrix Cov_z = {
+  { gps_pos_var, 0, 0, 0, 0 },
+  { 0, gps_pos_var, 0, 0, 0 },
+  { 0, 0, bmp_pos_var, 0, 0 },
+  { 0, 0, 0, gps_vel_var, 0 },
+  { 0, 0, 0, 0, gps_vel_var },
+};
+
+Matrix I = {
+  { 1, 0, 0, 0, 0, 0 },
+  { 0, 1, 0, 0, 0, 0 },
+  { 0, 0, 1, 0, 0, 0 },
+  { 0, 0, 0, 1, 0, 0 },
+  { 0, 0, 0, 0, 1, 0 },
+  { 0, 0, 0, 0, 0, 1 },
+};
+
+Vector y = {
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+  { 0 },
+};
+
+Matrix R = C * Cov_z * C_T;
+
+Matrix S = H * P * H_T;
+
+Matrix K = P * H_T / S(0, 0);
 
 // Enable components
-bool ENABLE_SD =      true;
-bool ENABLE_Radio =   true;
+bool ENABLE_SD = true;
+bool ENABLE_Radio = false;
 
-bool ENABLE_BMP =     true;
-bool ENABLE_TRM =     true;
-bool ENABLE_BNO =     true;
-bool ENABLE_GPS =     true;
+bool ENABLE_BMP = true;
+bool ENABLE_TRM = false;
+bool ENABLE_BNO = true;
+bool ENABLE_GPS = true;
 
 // Multithreading
 //TaskHandle_t DHCore; // Data-Handling Core
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(2000000);
 
   // NeoPixel
-  //LED.begin();
-  //LED.show();
+  LED.begin();
+  LED.show();
 
   // Status LED
   pinMode(STATUS_LED, OUTPUT);
 
   if (ENABLE_SD) {
     setupSD();
+    setupSPIFFS();
     writeHeader();
   }
   if (ENABLE_Radio) {
@@ -214,19 +375,11 @@ void setup() {
     setupGPS();
   }
 
-  resetKalmanState();
-  
   if (ENABLE_SD) {
-    deleteData();
+    //deleteData();
   }
 
   setupBlink();
-
-  pinMode(buttonPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(buttonPin), buttonInterrupt, FALLING);
-  Serial.println("Delay start");
-  delay(3000);
-  Serial.println("Delay end");
 
   xTaskCreatePinnedToCore(
     DHTask,
@@ -234,12 +387,17 @@ void setup() {
     10000,
     NULL,
     1,
-    NULL, // &DHCore
+    NULL,  // &DHCore
     1);
 
   if (ENABLE_BNO) {
     tickerIMU.attach(IMU_INTERVAL, IMU_INTERRUPT);
   }
+}
+
+void debugMatrix(Matrix matrix) {
+  cout << matrix << "\n"
+       << std::endl;
 }
 
 void setupSD() {
@@ -249,16 +407,23 @@ void setupSD() {
   }
 }
 
+void setupSPIFFS() {
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    errorBlink("SPIFFS");
+  }
+}
+
 void writeHeader() {
   char* header = "Seconds [s], Kalman x [m], Kalman y [m], Kalman z [m], Acceleration x [m/s^2], Acceleration y [m/s^2], Acceleration z [m/s^2], Velocity x [m/s], Velocity y [m/s], Velocity z [m/s], q0, q1, q2, q3, Latitude [degrees], Longitude [degrees], GPS Delta x [m], GPS Delta y [m], BMP Altitude [m]";
   appendFile(header);
 }
 
 void setupRadio() {
-  /*
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
 
+  /*
   // manual reset
   digitalWrite(RFM95_RST, LOW);
   delay(10);
@@ -283,20 +448,22 @@ void setupRadio() {
   //rf95.setPayloadCRC(false);
   rf95.setTxPower(23, false);
   */
-  
+
   Serial.println("LoRa Sender");
   LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
 
   if (!LoRa.begin(434.69E6)) {
     Serial.println("Starting LoRa failed!");
-    while (1);
+    while (1)
+      ;
   } else {
     Serial.println("Starting LoRa successful!");
   }
 
   //LoRa.setSpreadingFactor(12);
   //LoRa.setSignalBandwidth(125E3);
-  LoRa.setTxPower(20);
+  LoRa.setSyncWord(0xF3);
+  LoRa.setTxPower(23);
 }
 
 void setupBMP() {
@@ -336,13 +503,14 @@ void setupGPS() {
   GPS.begin(9600);
   GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_10HZ);
+  GPS.sendCommand("$PMTK386,0*23");
+  GPS.sendCommand(PMTK_ENABLE_SBAS);
 }
 
 void setupBlink() {
   // Status LED
   digitalWrite(STATUS_LED, HIGH);
 
-  /*
   // NeoPixel
   for (int i = 0; i < 3; i++) {
     LED.setPixelColor(0, LED.Color(255, 255, 255));
@@ -352,10 +520,9 @@ void setupBlink() {
     LED.show();
     delay(100);
   }
-  */
 }
 
-void errorBlink(String message) {  
+void errorBlink(String message) {
   // Status LED
   digitalWrite(STATUS_LED, LOW);
 
@@ -364,7 +531,6 @@ void errorBlink(String message) {
 
   delay(5000);
 
-  /*
   // NeoPixel
   LED.setPixelColor(0, LED.Color(255, 0, 0));
   LED.show();
@@ -372,9 +538,6 @@ void errorBlink(String message) {
   LED.setPixelColor(0, LED.Color(0, 0, 0));
   LED.show();
   delay(200);
-  */
-
-  //while (1) {}
 }
 
 void appendFile(char* message) {
@@ -391,84 +554,70 @@ void appendFile(char* message) {
 }
 
 void checkCommand() {
-  if (!button_pressed) { return; }
-
-  button_active = false;
-  //LED.setPixelColor(0, LED.Color(255, 255, 255));
-  //LED.show();
-  delay(1000);
-  //LED.setPixelColor(0, LED.Color(0, 0, 0));
-  //LED.show();
-  button_active = true;
+  if (Serial.available()) {
+    command_active = true;
+    serialFlush();
+  } else {
+    return;
+  }
 
   Serial.println();
   Serial.println("Waiting for command...");
   Serial.println();
 
-  while (button_pressed) {
+  while (command_active) {
     if (Serial.available() > 0) {
-      char receivedChar = Serial.read();
+      String receivedString = Serial.readStringUntil('\n');
+      serialFlush();
 
-      // Perform actions based on the received command
-      switch (receivedChar) {
-        case 'k':
-          resetKalmanState();
-          break;
-
-        case 'r':
-          readData();
-          break;
-
-        case 'd':
-          deleteData();
-          break;
-
-        default:
-          Serial.print("\t");
-          Serial.println("Unknown command received.");
-          Serial.println();
-          errorBlink("Unknown command received");
-          break;
+      if (receivedString == "rs") {
+        readSDData();
+      } else if (receivedString == "rf") {
+        readFlashData();
+      } else if (receivedString == "ds") {
+        deleteSDData();
+      } else if (receivedString == "df") {
+        deleteFlashData();
+      } else if (receivedString == "cs") {
+        checkSDData();
+      } else if (receivedString == "cf") {
+        checkFlashData();
+      } else if (receivedString == "e") {
+        command_active = false;
+      } else {
+        Serial.print("\t");
+        Serial.println("Unknown command received: '" + receivedString + "'");
+        Serial.println();
+        errorBlink("Unknown command received");
       }
 
-      if (button_pressed) {
+      if (command_active) {
         Serial.println();
         Serial.println("Waiting for command...");
       }
 
       Serial.println();
-      serialFlush();
     }
   }
   Serial.println("Command canceled");
   Serial.println();
 }
 
-void resetKalmanState() {
-  kalman_offset_x = kalman_x;
-  kalman_offset_y = kalman_y;
-  kalman_offset_z = kalman_z;
-
-  kalman_x -= kalman_offset_x;
-  kalman_y -= kalman_offset_y;
-
-  Serial.println("Kalman State Reset!");
-}
-
-void readData() {
+void readSDData() {
   myFile = SD.open(FILE_NAME);
   if (myFile) {
-    //LED.setPixelColor(0, LED.Color(0, 0, 255));
-    //LED.show();
+    LED.setPixelColor(0, LED.Color(0, 0, 255));
+    LED.show();
     digitalWrite(STATUS_LED, LOW);
-    while (myFile.available() > 0) {
-      Serial.println(myFile.readStringUntil('\n'));
+    while (myFile.available() && !Serial.available()) {
+      Serial.write(myFile.read());
     }
+    Serial.println();
     myFile.close();
     digitalWrite(STATUS_LED, HIGH);
 
-    //LED.setPixelColor(0, LED.Color(0, 0, 0));
-    //LED.show();
+    LED.setPixelColor(0, LED.Color(0, 0, 0));
+    LED.show();
     delay(500);
   } else {
     Serial.print("\t");
@@ -477,19 +626,42 @@ void readData() {
   }
 }
 
-void deleteData() {
+void readFlashData() {
+  myFile = SPIFFS.open(FILE_NAME);
+  if (myFile) {
+    LED.setPixelColor(0, LED.Color(0, 0, 255));
+    LED.show();
+    digitalWrite(STATUS_LED, LOW);
+    while (myFile.available() && !Serial.available()) {
+      Serial.write(myFile.read());
+    }
+    Serial.println();
+    myFile.close();
+    digitalWrite(STATUS_LED, HIGH);
+
+    LED.setPixelColor(0, LED.Color(0, 0, 0));
+    LED.show();
+    delay(500);
+  } else {
+    Serial.print("\t");
+    Serial.println("Error opening file for reading.");
+    errorBlink("SPIFFS Read");
+  }
+}
+
+void deleteSDData() {
   if (SD.exists(FILE_NAME)) {
     Serial.print("\t");
     Serial.print("Deleting file in...");
     delay(1000);
     for (int i = 3; i > 0; i--) {
       Serial.print(" " + String(i) + "...");
-      //LED.setPixelColor(0, LED.Color(255, 0, 0));
-      //LED.show();
+      LED.setPixelColor(0, LED.Color(255, 0, 0));
+      LED.show();
       digitalWrite(STATUS_LED, HIGH);
       delay(500);
-      //LED.setPixelColor(0, LED.Color(0, 0, 0));
-      //LED.show();
+      LED.setPixelColor(0, LED.Color(0, 0, 0));
+      LED.show();
       digitalWrite(STATUS_LED, LOW);
       delay(500);
     }
@@ -500,6 +672,41 @@ void deleteData() {
     Serial.println("[" + FILE_NAME + "] not found");
     errorBlink("SD Delete");
   }
+}
+
+void deleteFlashData() {
+  if (SPIFFS.exists(FILE_NAME)) {
+    Serial.print("\t");
+    Serial.print("Deleting file in...");
+    delay(1000);
+    for (int i = 3; i > 0; i--) {
+      Serial.print(" " + String(i) + "...");
+      LED.setPixelColor(0, LED.Color(255, 0, 0));
+      LED.show();
+      digitalWrite(STATUS_LED, HIGH);
+      delay(500);
+      LED.setPixelColor(0, LED.Color(0, 0, 0));
+      LED.show();
+      digitalWrite(STATUS_LED, LOW);
+      delay(500);
+    }
+    SPIFFS.remove(FILE_NAME);
+    Serial.println(" File deleted!");
+  } else {
+    Serial.print("\t");
+    Serial.println("[" + FILE_NAME + "] not found");
+    errorBlink("SPIFFS Delete");
+  }
+}
+
+void checkSDData() {
+  Serial.print("\t");
+  Serial.println("Used space on SD: " + String(SD.usedBytes() / (1024 * 1024)) + " / " + String(SD.totalBytes() / (1024 * 1024)) + " MB (6 MB = EMPTY)");
+}
+
+void checkFlashData() {
+  Serial.print("\t");
+  Serial.println("Used space on flash: " + String(SPIFFS.usedBytes() / (1024)) + " / " + String(SPIFFS.totalBytes() / (1024)) + " KB");
 }
 
 void serialFlush() {
@@ -519,7 +726,7 @@ void setReports() {
   }
 }
 
-void rotateVectorWithQuaternion(float *vector, float *quaternion) {
+void rotateVectorWithQuaternion(float* vector, float* quaternion) {
   // Convert the quaternion to a rotation matrix
   float rotMatrix[3][3];
   rotMatrix[0][0] = 1 - 2 * (quaternion[2] * quaternion[2] + quaternion[3] * quaternion[3]);
@@ -566,49 +773,29 @@ DeltaMetersOutput calculateDeltaMeter(float lat1, float lon1, float lat2, float 
   return { calc_delta_meter_x, calc_delta_meter_y };
 }
 
-void KalmanFilter(float &x, float v, float z, float &K, float R, float &P, int index) {
-  // Predict
-  float pred_x = x + v * (delta_micros * 0.000001);
-  float pred_P = P + Q;
-
-  // Update
-  float innovation = z - pred_x;
-  float S = pred_P + R;
-  K = pred_P / S;
-  x = pred_x + K * innovation;
-  P = (1 - K) * P;
-
-  /*
-  if (index == 2) {
-    Serial.print("  ");
-    Serial.println(innovation);
-  } else {
-    Serial.print("  ");
-    Serial.print(innovation);
-  }
-  */
+void predict() {
+  x = F * x + B * u;
+  P = F * P * F_T + Q;
 }
 
-void correctionAlgorithm(float &vel, float target_vel, float delta_micros) {
-  if (vel > target_vel) {
-    vel -= CORRECTION_MAGNITUDE * (delta_micros * 0.000001);
-  } else {
-    vel += CORRECTION_MAGNITUDE * (delta_micros * 0.000001);
-  }
+void update() {
+  y = z - H * x;
+  S = H * P * H_T + R;
+  K = P * H_T / S(0, 0);
+  x = x + K * y;
+  P = (I - K * H) * P;
 }
 
-void buttonInterrupt() {
-  if (button_active) {
-    if (button_pressed) {
-      button_pressed = false;
-    } else {
-      button_pressed = true;
-    }
-  }
+float randomNormal(float std_dev) {
+  float u1 = random(1, 32767) / 32767.0;  // Uniform random number between 0 and 1
+  float u2 = random(1, 32767) / 32767.0;  // Uniform random number between 0 and 1
+
+  float z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * PI * u2);  // Box-Muller transform
+  return std_dev * z0;                                   // Scale and shift the result
 }
 
 void IMU_INTERRUPT() {
-  if (button_pressed) { return; }
+  if (command_active) { return; }
 
   //Serial.print("BNO running on core");
   //Serial.println(xPortGetCoreID());
@@ -634,79 +821,92 @@ void IMU_INTERRUPT() {
           delta_micros = micros() - last_micros;
           last_micros = micros();
 
-          vel_x += vector[0] * (delta_micros * 0.000001);
-          vel_y += vector[1] * (delta_micros * 0.000001);
-          vel_z += vector[2] * (delta_micros * 0.000001);     
+          u = {
+            { vector[0] },
+            { vector[1] },
+            { vector[2] },
+          };
 
-          float delta_since_gps = (millis() - last_millis) * 0.001;
+          predict();
 
-          KalmanFilter(kalman_x, vel_x, GPS_delta_meter_x + delta_since_gps * GPS_vel_x, IMU_K, IMU_R, IMU_P, 0);
-          KalmanFilter(kalman_y, vel_y, GPS_delta_meter_y + delta_since_gps * GPS_vel_y, IMU_K, IMU_R, IMU_P, 1);
-          KalmanFilter(kalman_z, vel_z, BMP_alt, BMP_K, BMP_R, BMP_P, 2);
-
-          correctionAlgorithm(vel_x, GPS_vel_x, delta_micros);
-          correctionAlgorithm(vel_y, GPS_vel_y, delta_micros);
-          correctionAlgorithm(vel_z, 0, delta_micros);
-
-          //  Visualize Accelerometer Vector with LED
-          //x_color_factor = 1 / (1 + (pow(vector[0], 2) / 50));
-          //y_color_factor = 1 / (1 + (pow(vector[1], 2) / 50));
-          //z_color_factor = 1 / (1 + (pow(vector[2], 2) / 50));
-
-          //LED.setPixelColor(0, LED.Color(255 * (1 - x_color_factor), 255 * (1 - y_color_factor), 255 * (1 - z_color_factor)));
-          //LED.show();
-        
-          data[writing_index].sec = float(micros()) * 0.000001;
-          data[writing_index].delta_millis = delta_micros * 0.001;
-          data[writing_index].kalman_x = kalman_x;
-          data[writing_index].kalman_y = kalman_y;
-          data[writing_index].kalman_z = kalman_z;
-          data[writing_index].acc_x = acc_x;
-          data[writing_index].acc_y = acc_y;
-          data[writing_index].acc_z = acc_z;
-          data[writing_index].vel_x = vel_x;
-          data[writing_index].vel_y = vel_y;
-          data[writing_index].vel_z = vel_z;
-          data[writing_index].q0 = q0;
-          data[writing_index].q1 = q1;
-          data[writing_index].q2 = q2;
-          data[writing_index].q3 = q3;
-          data[writing_index].GPS_lat = GPS_lat;
-          data[writing_index].GPS_lon = GPS_lon;
-          data[writing_index].GPS_m_x = GPS_delta_meter_x + delta_since_gps * GPS_vel_x;
-          data[writing_index].GPS_m_y = GPS_delta_meter_y + delta_since_gps * GPS_vel_y;
-          data[writing_index].BMP_alt = BMP_alt;
-
-          //Serial.println(writing_index);
-
-          writing_index++;
+          Serial.print(x(0, 0), 4);
+          Serial.print(",");
+          Serial.print(x(1, 0), 4);
+          Serial.print(",");
+          Serial.print(x(2, 0), 4);
+          Serial.print(",");
+          Serial.print(GPS_delta_meter_x, 4);
+          Serial.print(",");
+          Serial.print(GPS_delta_meter_y, 4);
+          Serial.print(",");
+          Serial.println(BMP_alt, 4);
 
           /*
-          Serial.print(kalman_x, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(kalman_y, decimal_places);
-          Serial.print(data_seperator);
-          Serial.println(kalman_z, decimal_places);
-
-          Serial.print(data_seperator);
-          Serial.print(GPS_delta_meter_x + delta_since_gps * GPS_vel_x);
-          Serial.print(data_seperator);
-          Serial.print(GPS_delta_meter_y + delta_since_gps * GPS_vel_y);
-          Serial.print(data_seperator);
-          Serial.print(vel_x, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(vel_y, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(vel_z, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(GPS_vel_x, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(GPS_vel_y, decimal_places);
-          Serial.print(data_seperator);
-          Serial.print(GPS_speed, decimal_places);
-          Serial.print(data_seperator);
-          Serial.println(GPS_angle, decimal_places);
+          Serial.print(GPS_delta_meter_x, 4);
+          Serial.print("\t");
+          Serial.print(GPS_delta_meter_y, 4);
+          Serial.print("\t");
+          
+          Serial.print(BMP_alt, 4);
+          Serial.print("\t");
+          Serial.print(x(0, 0), 4);
+          Serial.print("\t");
+          Serial.print(x(1, 0), 4);
+          Serial.print("\t");
+          Serial.print(x(2, 0), 4);
+          Serial.print("\t");
+          Serial.print(x(3, 0), 4);
+          Serial.print("\t");
+          Serial.print(x(4, 0), 4);
+          Serial.print("\t");
+          Serial.println(x(5, 0), 4);
           */
+
+          /*
+          //  Visualize Accelerometer Vector with LED
+          x_color_factor = 1 / (1 + (pow(vector[0], 2) / 50));
+          y_color_factor = 1 / (1 + (pow(vector[1], 2) / 50));
+          z_color_factor = 1 / (1 + (pow(vector[2], 2) / 50));
+
+          LED.setPixelColor(0, LED.Color(255 * (1 - x_color_factor), 255 * (1 - y_color_factor), 255 * (1 - z_color_factor)));
+          LED.show();
+          */
+
+          if (ENABLE_SD) {
+            data[writing_index].sec = float(micros()) * 0.000001;
+            data[writing_index].delta_millis = delta_micros * 0.001;
+            data[writing_index].kalman_x = x(0, 0);
+            data[writing_index].kalman_y = x(1, 0);
+            data[writing_index].kalman_z = x(2, 0);
+            data[writing_index].acc_x = vector[0];
+            data[writing_index].acc_y = vector[1];
+            data[writing_index].acc_z = vector[2];
+            data[writing_index].vel_x = x(3, 0);
+            data[writing_index].vel_y = x(4, 0);
+            data[writing_index].vel_z = x(5, 0);
+            data[writing_index].q0 = q0;
+            data[writing_index].q1 = q1;
+            data[writing_index].q2 = q2;
+            data[writing_index].q3 = q3;
+            data[writing_index].GPS_lat = GPS_lat;
+            data[writing_index].GPS_lon = GPS_lon;
+            data[writing_index].GPS_m_x = GPS_delta_meter_x;
+            data[writing_index].GPS_m_y = GPS_delta_meter_y;
+            data[writing_index].BMP_alt = BMP_alt;
+
+            /*
+            f_data[writing_index].k_x = x(0, 0);
+            f_data[writing_index].k_y = x(1, 0);
+            f_data[writing_index].k_z = x(2, 0);
+            f_data[writing_index].raw_x = GPS_delta_meter_x;
+            f_data[writing_index].raw_y = GPS_delta_meter_y;
+            f_data[writing_index].raw_z = BMP_alt;
+            */
+
+            //Serial.println(writing_index);
+
+            writing_index++;
+          }
 
           FlipFlop = false;
         }
@@ -730,7 +930,7 @@ float temp(float voltage) {
 }
 
 void checkGPSSentence() {
-  if (button_pressed) { return; }
+  if (command_active) { return; }
 
   char c = GPS.read();
   if (GPS.newNMEAreceived()) {
@@ -738,8 +938,6 @@ void checkGPSSentence() {
   } else {
     return;
   }
-
-  Serial.print("New sentence recieved: ");
 
   if (GPS_ori_lat == 0 && GPS_ori_lon == 0) {
     GPS_ori_lat = GPS_lat;
@@ -749,10 +947,6 @@ void checkGPSSentence() {
   GPS_lat = convertCords(GPS.latitude);
   GPS_lon = convertCords(GPS.longitude);
 
-  Serial.print(GPS_lat, 6);
-  Serial.print(", ");
-  Serial.println(GPS_lon, 6);
-
   GPS_speed = GPS.speed * 0.51444444444444;
   GPS_angle = GPS.angle;
 
@@ -761,10 +955,8 @@ void checkGPSSentence() {
 
   DeltaMetersOutput delta_meters_output = calculateDeltaMeter(GPS_lat, GPS_lon, GPS_ori_lat, GPS_ori_lon, BMP_alt);
 
-  if (sqrt(pow(delta_meters_output.x, 2) + pow(delta_meters_output.y, 2)) < 10) {
-    GPS_delta_meter_x = delta_meters_output.x;
-    GPS_delta_meter_y = delta_meters_output.y;
-  }
+  GPS_delta_meter_x = -1 * delta_meters_output.x;
+  GPS_delta_meter_y = -1 * delta_meters_output.y;
 
   if (abs(GPS_delta_meter_x) > 100000) {
     GPS_delta_meter_x = 0;
@@ -772,6 +964,24 @@ void checkGPSSentence() {
   }
 
   last_millis = millis();
+
+  if (ENABLE_BMP) {
+    BMP_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    BMP_alt -= kalman_offset_z;
+    BMP_alt_vel = (BMP_alt - last_BMP_alt) * BMP_freq;
+    last_BMP_alt = BMP_alt;
+  }
+
+  z = {
+    { GPS_delta_meter_x },
+    { GPS_delta_meter_y },
+    { BMP_alt },
+    { GPS_vel_x },
+    { GPS_vel_y },
+    { BMP_alt_vel },
+  };
+
+  update();
 }
 
 void sendRadioPacket() {
@@ -791,16 +1001,16 @@ void sendRadioPacket() {
   Serial.println("Sent: " + String(radiopacket));
   */
 
-  LoRa.beginPacket();
-  LoRa.print(radio_packet_num);
-  LoRa.print(",");
-  LoRa.print(BMP_alt);
-  LoRa.endPacket(true);
+  String data = String(radio_packet_num) + "," + String(sqrt(pow(x(0, 0), 2) + pow(x(1, 0), 2) + pow((x(2, 0) - BMP_start_alt), 2)));
+
+  bool packetSent = LoRa.beginPacket() && LoRa.print(data) && LoRa.endPacket(true);
+
+  if (packetSent != 1) { setupRadio(); }
 
   radio_packet_num++;
-  
+
   /*
-  //String data = "Temp: " + String(temperature) + "  Alt: " + String(BMP_alt) + " Lat: " + String(GPS_lat, 6) + " Lon: " + String(GPS_lon, 6);
+  String data = "Temp: " + String(temperature) + "  Alt: " + String(BMP_alt) + " Lat: " + String(GPS_lat, 6) + " Lon: " + String(GPS_lon, 6);
   String data = "test";
 
   char sensorData[data.length() + 1];
@@ -815,10 +1025,8 @@ void sendRadioPacket() {
   */
 }
 
-void DHTask( void * parameter ) {
-  for(;;) {
-    //Serial.println(uxTaskGetStackHighWaterMark(NULL));
-
+void DHTask(void* parameter) {
+  for (;;) {
     checkCommand();
     if (ENABLE_GPS) {
       checkGPSSentence();
@@ -833,8 +1041,8 @@ void DHTask( void * parameter ) {
         sendRadioPacket();
 
         // send packet
-        Serial.print("Radio running on core");
-        Serial.println(xPortGetCoreID());
+        //Serial.print("Radio running on core");
+        //Serial.println(xPortGetCoreID());
 
         float millis_2 = micros();
         Serial.print("Radio sent and took ");
@@ -848,72 +1056,74 @@ void DHTask( void * parameter ) {
         analogValue = analogRead(26);
         voltage = 3.3 * analogValue / 4096;
         temperature = temp(voltage);
-        Serial.print("Temp: ");
-        Serial.println(temperature);
-      }
-    }
-
-    if (writing_index >= dataArraySize - 25) {
-      if (ENABLE_SD) {
-        int readRange = writing_index;
-
-        myFile = SD.open(FILE_NAME, FILE_APPEND);
-
-        if (myFile) {
-          for (int j = 0; j < readRange; j++) {
-            sprintf(data_char, "%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%.3f,%.3f,%.3f", 
-              data[0].sec, 
-              data[0].delta_millis, 
-              data[0].kalman_x, 
-              data[0].kalman_y, 
-              data[0].kalman_z, 
-              data[0].acc_x, 
-              data[0].acc_y, 
-              data[0].acc_z, 
-              data[0].vel_x, 
-              data[0].vel_y, 
-              data[0].vel_z, 
-              data[0].q0, 
-              data[0].q1, 
-              data[0].q2, 
-              data[0].q3, 
-              data[0].GPS_lat, 
-              data[0].GPS_lon, 
-              data[0].GPS_m_x, 
-              data[0].GPS_m_y, 
-              data[0].BMP_alt);
-
-            myFile.println(data_char);
-            myFile.flush();
-
-            for (int k = 0; k < dataArraySize - 1; k++) {
-              data[k] = data[k + 1];
-            }
-            writing_index--;
-          }
-          myFile.close();
-          //Serial.println("Write complete");
-          //Serial.println();
-        } else {
-          Serial.println("Write failed");
-          Serial.println();
-        }
+        //Serial.print("Temp: ");
+        //Serial.println(temperature);
       }
     }
   }
 }
 
 void loop() {
-  if (millis() - BMP_timer > 1000 / BMP_freq) {
-    if (ENABLE_BMP) {
-      BMP_timer = millis();
-      BMP_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
-      BMP_alt -= kalman_offset_z;  
-      BMP_alt_vel = (BMP_alt - last_BMP_alt) * 10;
-      last_BMP_alt = BMP_alt;
+  if (writing_index >= dataArraySize - 10) {
+    if (ENABLE_SD) {
+      int readRange = writing_index;
 
-      Serial.print("Altitude is: ");
-      Serial.println(BMP_alt);
+      myFile = SD.open(FILE_NAME, FILE_APPEND);
+      //flashFile = SPIFFS.open(FILE_NAME, FILE_APPEND);
+
+      if (myFile) {
+        for (int j = 0; j < readRange; j++) {
+          sprintf(data_char, "%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%.3f,%.3f,%.3f",
+                  data[0].sec,
+                  data[0].delta_millis,
+                  data[0].kalman_x,
+                  data[0].kalman_y,
+                  data[0].kalman_z,
+                  data[0].acc_x,
+                  data[0].acc_y,
+                  data[0].acc_z,
+                  data[0].vel_x,
+                  data[0].vel_y,
+                  data[0].vel_z,
+                  data[0].q0,
+                  data[0].q1,
+                  data[0].q2,
+                  data[0].q3,
+                  data[0].GPS_lat,
+                  data[0].GPS_lon,
+                  data[0].GPS_m_x,
+                  data[0].GPS_m_y,
+                  data[0].BMP_alt);
+
+          myFile.println(data_char);
+          myFile.flush();
+
+          /*
+          sprintf(data_char, "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",
+                  f_data[0].k_x,
+                  f_data[0].k_y,
+                  f_data[0].k_z,
+                  f_data[0].raw_x,
+                  f_data[0].raw_y,
+                  f_data[0].raw_z);
+
+          flashFile.println(data_char);
+          flashFile.flush();
+          */
+
+          for (int k = 0; k < dataArraySize - 1; k++) {
+            data[k] = data[k + 1];
+          }
+          writing_index--;
+        }
+        myFile.close();
+        //flashFile.close();
+        //Serial.println("Write complete");
+        //Serial.println();
+      } else {
+        Serial.println("Write failed");
+        Serial.println();
+      }
     }
   }
 }
